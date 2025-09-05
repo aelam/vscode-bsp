@@ -1,0 +1,249 @@
+{
+  "name": "vscode-bsp",
+  "displayName": "BSP Client",
+  "description": "A general Build Server Protocol client for VSCode",
+  "version": "0.1.0",
+  "engines": {
+    "vscode": "^1.74.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "workspaceContains:**/.bsp/*",
+    "onCommand:bsp.activate"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "bsp.activate",
+        "title": "Activate BSP Extension",
+        "category": "BSP"
+      },
+      {
+        "command": "bsp.refresh",
+        "title": "Refresh Build Targets",
+        "category": "BSP"
+      },
+      {
+        "command": "bsp.showTargets",
+        "title": "Show Build Targets",
+        "category": "BSP"
+      },
+      {
+        "command": "bsp.compile",
+        "title": "Compile Target",
+        "category": "BSP"
+      },
+      {
+        "command": "bsp.test",
+        "title": "Test Target",
+        "category": "BSP"
+      },
+      {
+        "command": "bsp.run",
+        "title": "Run Target",
+        "category": "BSP"
+      },
+      {
+        "command": "bsp.debug",
+        "title": "Debug Target",
+        "category": "BSP"
+      }
+    ],
+    "views": {
+      "explorer": [
+        {
+          "id": "bspTargets",
+          "name": "Build Targets",
+          "when": "bsp.enabled"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "bsp.refresh",
+          "when": "view == bspTargets",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "bsp.compile",
+          "when": "view == bspTargets && viewItem == buildTarget",
+          "group": "inline"
+        },
+        {
+          "command": "bsp.test",
+          "when": "view == bspTargets && viewItem == testTarget",
+          "group": "inline"
+        },
+        {
+          "command": "bsp.run",
+          "when": "view == bspTargets && viewItem == runTarget",
+          "group": "inline"
+        },
+        {
+          "command": "bsp.debug",
+          "when": "view == bspTargets && viewItem == debugTarget",
+          "group": "inline"
+        }
+      ]
+    }
+  },
+  "breakpoints": [
+    {
+      "language": "scala"
+    },
+    {
+      "language": "java"
+    },
+    {
+      "language": "kotlin"
+    }
+  ],
+  "debuggers": [
+    {
+      "type": "bsp-debug",
+      "label": "BSP Debug",
+      "program": "./out/debugAdapter.js",
+      "runtime": "node",
+      "configurationAttributes": {
+        "launch": {
+          "required": [
+            "program"
+          ],
+          "properties": {
+            "program": {
+              "type": "string",
+              "description": "Absolute path to the program.",
+              "default": "${workspaceFolder}/${command:AskForProgramName}"
+            },
+            "stopOnEntry": {
+              "type": "boolean",
+              "description": "Automatically stop after launch.",
+              "default": true
+            },
+            "args": {
+              "type": "array",
+              "description": "Command line arguments passed to the program.",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            },
+            "cwd": {
+              "type": "string",
+              "description": "Absolute path to the working directory of the program being debugged.",
+              "default": "${workspaceFolder}"
+            },
+            "environment": {
+              "type": "array",
+              "description": "Environment variables passed to the program.",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "description": "Name of the environment variable."
+                  },
+                  "value": {
+                    "type": "string",
+                    "description": "Value of the environment variable."
+                  }
+                }
+              },
+              "default": []
+            }
+          }
+        },
+        "attach": {
+          "required": [
+            "connect"
+          ],
+          "properties": {
+            "connect": {
+              "type": "object",
+              "description": "Connect to debug server",
+              "properties": {
+                "host": {
+                  "type": "string",
+                  "description": "Host name or IP address",
+                  "default": "localhost"
+                },
+                "port": {
+                  "type": "number",
+                  "description": "Port number",
+                  "default": 5005
+                },
+                "socket": {
+                  "type": "string",
+                  "description": "Unix socket path"
+                }
+              }
+            }
+          }
+        }
+      },
+      "initialConfigurations": [
+        {
+          "type": "bsp-debug",
+          "request": "launch",
+          "name": "BSP Debug",
+          "program": "${workspaceFolder}/${command:AskForProgramName}",
+          "stopOnEntry": true
+        }
+      ],
+      "configurationSnippets": [
+        {
+          "label": "BSP Debug: Launch",
+          "description": "A new configuration for debugging a BSP target",
+          "body": {
+            "type": "bsp-debug",
+            "request": "launch",
+            "name": "BSP Debug",
+            "program": "^\"\\${workspaceFolder}/\\${command:AskForProgramName}\"",
+            "stopOnEntry": true
+          }
+        },
+        {
+          "label": "BSP Debug: Attach",
+          "description": "A new configuration for attaching to a BSP debug server",
+          "body": {
+            "type": "bsp-debug",
+            "request": "attach",
+            "name": "BSP Attach",
+            "connect": {
+              "host": "localhost",
+              "port": 5005
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile && npm run lint",
+    "lint": "eslint src --ext ts",
+    "test": "node ./out/test/runTest.js",
+    "package": "vsce package",
+    "install-local": "code --install-extension vscode-bsp-*.vsix"
+  },
+  "devDependencies": {
+    "@types/node": "16.x",
+    "@types/vscode": "^1.74.0",
+    "@typescript-eslint/eslint-plugin": "^5.45.0",
+    "@typescript-eslint/parser": "^5.45.0",
+    "@vscode/test-electron": "^2.2.0",
+    "eslint": "^8.28.0",
+    "typescript": "^4.9.4"
+  },
+  "dependencies": {
+    "vscode-jsonrpc": "^8.0.2"
+  }
+}

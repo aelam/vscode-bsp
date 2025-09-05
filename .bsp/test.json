@@ -1,0 +1,13 @@
+{
+    "name": "mock-bsp-server",
+    "version": "1.0.0",
+    "bspVersion": "2.1.0",
+    "languages": [
+        "scala",
+        "java"
+    ],
+    "argv": [
+        "node",
+        "mock-bsp-server.js"
+    ]
+}

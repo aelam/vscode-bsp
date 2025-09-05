@@ -1,0 +1,40 @@
+# Node
+node_modules/
+npm-debug.log*
+yarn-error.log*
+
+# VSCode
+.vscode/
+.vscode-test-data/
+.vscode-test-extensions/
+*.code-workspace
+
+# TypeScript
+out/
+*.tsbuildinfo
+
+# Build/Dist
+dist/
+build/
+*.vsix
+
+# OS/Editor
+.DS_Store
+Thumbs.db
+
+# Env
+.env
+.env.local
+.env.*.local
+
+# Coverage
+coverage/
+*.lcov
+
+# Logs
+logs/
+*.log
+
+# Others
+.idea/
+*.swp
