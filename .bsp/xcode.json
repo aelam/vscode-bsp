@@ -1,0 +1,7 @@
+{
+  "name": "Xcode BSP Server",
+  "version": "1.0.0",
+  "bspVersion": "2.1.0",
+  "languages": ["swift", "objective-c"],
+  "argv": ["node", "/Users/wang.lun/Work/vscode-bsp/mock-xcode-bsp-server.js"]
+}

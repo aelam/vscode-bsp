@@ -17,6 +17,29 @@ export interface BuildTarget {
     data?: any;
 }
 
+export interface XcodeTarget {
+    projectPath: string;
+    schemes: XcodeScheme[];
+    destinations: XcodeDestination[];
+    selectedScheme?: string;
+    selectedDestination?: string;
+}
+
+export interface XcodeScheme {
+    name: string;
+    type: 'run' | 'test' | 'archive' | 'analyze';
+    buildable: boolean;
+}
+
+export interface XcodeDestination {
+    id: string;
+    name: string;
+    platform: 'iOS' | 'macOS' | 'watchOS' | 'tvOS';
+    deviceType: 'simulator' | 'device' | 'mac';
+    version?: string;
+    identifier?: string;
+}
+
 export interface BuildTargetCapabilities {
     canCompile: boolean;
     canTest: boolean;

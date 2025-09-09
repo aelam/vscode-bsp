@@ -34,51 +34,6 @@ export class BuildTargetProvider implements vscode.TreeDataProvider<BuildTargetI
         } else {
             // Show target details and dependencies
             const children: BuildTargetItem[] = [];
-            
-            // Add capabilities as children
-            if (element.buildTarget.capabilities.canCompile) {
-                children.push(new BuildTargetItem(
-                    {
-                        ...element.buildTarget,
-                        displayName: 'Can Compile'
-                    },
-                    vscode.TreeItemCollapsibleState.None,
-                    'capability'
-                ));
-            }
-            
-            if (element.buildTarget.capabilities.canTest) {
-                children.push(new BuildTargetItem(
-                    {
-                        ...element.buildTarget,
-                        displayName: 'Can Test'
-                    },
-                    vscode.TreeItemCollapsibleState.None,
-                    'capability'
-                ));
-            }
-            
-            if (element.buildTarget.capabilities.canRun) {
-                children.push(new BuildTargetItem(
-                    {
-                        ...element.buildTarget,
-                        displayName: 'Can Run'
-                    },
-                    vscode.TreeItemCollapsibleState.None,
-                    'capability'
-                ));
-            }
-
-            if (element.buildTarget.capabilities.canDebug) {
-                children.push(new BuildTargetItem(
-                    {
-                        ...element.buildTarget,
-                        displayName: 'Can Debug'
-                    },
-                    vscode.TreeItemCollapsibleState.None,
-                    'capability'
-                ));
-            }
 
             // Add dependencies
             if (element.buildTarget.dependencies.length > 0) {

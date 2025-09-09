@@ -74,7 +74,7 @@ async function initializeBspExtension(context: vscode.ExtensionContext) {
 
     // Initialize connection manager and multi-BSP provider
     connectionManager = new BspConnectionManager();
-    multiBspProvider = new MultiBspProvider(connectionManager);
+    multiBspProvider = new MultiBspProvider(connectionManager, context);
 
     // Register multi-BSP tree data provider
     const multiBspTreeView = vscode.window.createTreeView('bspTargets', {
@@ -148,21 +148,53 @@ async function initializeBspExtension(context: vscode.ExtensionContext) {
     });
 
     const connectServerCommand = vscode.commands.registerCommand('bsp.connectServer', async (item) => {
-        if (!connectionManager || !item?.connectionId) return;
+        logInfo(`BSP connect command triggered for item: ${JSON.stringify(item)}`);
+        
+        if (!connectionManager) {
+            logError('Connection manager not available');
+            vscode.window.showErrorMessage('Connection manager not available');
+            return;
+        }
+        
+        if (!item?.connectionId) {
+            logError(`No connection ID provided: ${JSON.stringify(item)}`);
+            vscode.window.showErrorMessage('No connection ID provided for connect');
+            return;
+        }
         
         try {
+            logInfo(`Connecting to server: ${item.connectionId}`);
             await connectionManager.connectToServer(item.connectionId);
             vscode.window.showInformationMessage(`Connected to BSP server`);
         } catch (error) {
+            logError('Failed to connect to server', error);
             vscode.window.showErrorMessage(`Failed to connect: ${error}`);
         }
     });
 
     const disconnectServerCommand = vscode.commands.registerCommand('bsp.disconnectServer', async (item) => {
-        if (!connectionManager || !item?.connectionId) return;
+        logInfo(`BSP disconnect command triggered for item: ${JSON.stringify(item)}`);
         
-        await connectionManager.disconnectFromServer(item.connectionId);
-        vscode.window.showInformationMessage(`Disconnected from BSP server`);
+        if (!connectionManager) {
+            logError('Connection manager not available');
+            vscode.window.showErrorMessage('Connection manager not available');
+            return;
+        }
+        
+        if (!item?.connectionId) {
+            logError(`No connection ID provided: ${JSON.stringify(item)}`);
+            vscode.window.showErrorMessage('No connection ID provided for disconnect');
+            return;
+        }
+        
+        try {
+            logInfo(`Disconnecting from server: ${item.connectionId}`);
+            await connectionManager.disconnectFromServer(item.connectionId);
+            vscode.window.showInformationMessage(`Disconnected from BSP server`);
+        } catch (error) {
+            logError('Failed to disconnect from server', error);
+            vscode.window.showErrorMessage(`Failed to disconnect: ${error}`);
+        }
     });
 
     const compileCommand = vscode.commands.registerCommand('bsp.compile', async (item) => {
@@ -279,6 +311,67 @@ async function initializeBspExtension(context: vscode.ExtensionContext) {
         // This command is disabled and should not be executable
     });
 
+    // Xcode-specific commands
+    const selectXcodeSchemeCommand = vscode.commands.registerCommand('bsp.selectXcodeScheme', async (item) => {
+        if (!multiBspProvider || !item?.buildTarget) return;
+        
+        const xcodeManager = multiBspProvider.getXcodeManager();
+        const scheme = await xcodeManager.selectScheme(item.buildTarget.id.uri);
+        
+        if (scheme) {
+            vscode.window.showInformationMessage(`Selected scheme: ${scheme}`);
+        }
+    });
+
+    const selectXcodeDestinationCommand = vscode.commands.registerCommand('bsp.selectXcodeDestination', async (item) => {
+        if (!multiBspProvider || !item?.buildTarget) return;
+        
+        const xcodeManager = multiBspProvider.getXcodeManager();
+        const destination = await xcodeManager.selectDestination(item.buildTarget.id.uri);
+        
+        if (destination) {
+            const xcodeDetails = xcodeManager.getXcodeDetails(item.buildTarget.id.uri);
+            const dest = xcodeDetails?.destinations.find(d => d.id === destination);
+            if (dest) {
+                vscode.window.showInformationMessage(`Selected destination: ${dest.name}`);
+            }
+        }
+    });
+
+    // Favorites management commands
+    const addToFavoritesCommand = vscode.commands.registerCommand('bsp.addToFavorites', async (item) => {
+        if (!multiBspProvider || !item?.buildTarget) return;
+        
+        await multiBspProvider.addToFavorites(item.buildTarget.id.uri);
+        vscode.window.showInformationMessage(`Added "${item.buildTarget.displayName || item.buildTarget.id.uri}" to favorites`);
+    });
+
+    const removeFromFavoritesCommand = vscode.commands.registerCommand('bsp.removeFromFavorites', async (item) => {
+        if (!multiBspProvider || !item?.buildTarget) return;
+        
+        await multiBspProvider.removeFromFavorites(item.buildTarget.id.uri);
+        vscode.window.showInformationMessage(`Removed "${item.buildTarget.displayName || item.buildTarget.id.uri}" from favorites`);
+    });
+
+    // Reconnect command for disconnected favorite targets
+    const reconnectFavoriteCommand = vscode.commands.registerCommand('bsp.reconnectFavorite', async (item) => {
+        logInfo(`BSP reconnect favorite command triggered for item: ${JSON.stringify(item)}`);
+        
+        if (!connectionManager || !item?.connectionId) {
+            vscode.window.showErrorMessage('Connection information not available');
+            return;
+        }
+        
+        try {
+            logInfo(`Reconnecting to server: ${item.connectionId}`);
+            await connectionManager.connectToServer(item.connectionId);
+            vscode.window.showInformationMessage(`Reconnected to BSP server for favorite target`);
+        } catch (error) {
+            logError('Failed to reconnect to server', error);
+            vscode.window.showErrorMessage(`Failed to reconnect: ${error}`);
+        }
+    });
+
     context.subscriptions.push(
         refreshCommand,
         showTargetsCommand,
@@ -294,7 +387,12 @@ async function initializeBspExtension(context: vscode.ExtensionContext) {
         compileDisabledCommand,
         testDisabledCommand,
         runDisabledCommand,
-        debugDisabledCommand
+        debugDisabledCommand,
+        selectXcodeSchemeCommand,
+        selectXcodeDestinationCommand,
+        addToFavoritesCommand,
+        removeFromFavoritesCommand,
+        reconnectFavoriteCommand
     );
 
     // Auto-discover and connect to BSP servers

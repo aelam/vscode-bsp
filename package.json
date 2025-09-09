@@ -118,6 +118,36 @@
         "category": "BSP",
         "icon": "$(bug)",
         "enablement": "false"
+      },
+      {
+        "command": "bsp.selectXcodeScheme",
+        "title": "Select Xcode Scheme",
+        "category": "BSP",
+        "icon": "$(list-selection)"
+      },
+      {
+        "command": "bsp.selectXcodeDestination",
+        "title": "Select Xcode Destination",
+        "category": "BSP",
+        "icon": "$(device-mobile)"
+      },
+      {
+        "command": "bsp.addToFavorites",
+        "title": "Add to Favorites",
+        "category": "BSP",
+        "icon": "$(star-empty)"
+      },
+      {
+        "command": "bsp.removeFromFavorites",
+        "title": "Remove from Favorites",
+        "category": "BSP",
+        "icon": "$(star-full)"
+      },
+      {
+        "command": "bsp.reconnectFavorite",
+        "title": "Reconnect to Server",
+        "category": "BSP",
+        "icon": "$(debug-restart)"
       }
     ],
     "views": {
@@ -202,8 +232,69 @@
           "command": "bsp.disconnectServer",
           "when": "view == bspTargets && viewItem == connectedBspServer",
           "group": "inline"
+        },
+        {
+          "command": "bsp.selectXcodeScheme",
+          "when": "view == bspTargets && viewItem == xcodeSchemeSelector",
+          "group": "inline"
+        },
+        {
+          "command": "bsp.selectXcodeDestination",
+          "when": "view == bspTargets && viewItem == xcodeDestinationSelector",
+          "group": "inline"
+        },
+        {
+          "command": "bsp.addToFavorites",
+          "when": "view == bspTargets && viewItem =~ /buildTarget/ && !(viewItem =~ /favorite/)",
+          "group": "favorites@1"
+        },
+        {
+          "command": "bsp.removeFromFavorites",
+          "when": "view == bspTargets && viewItem =~ /favorite/",
+          "group": "favorites@1"
+        },
+        {
+          "command": "bsp.reconnectFavorite",
+          "when": "view == bspTargets && viewItem =~ /favorite.*disconnected/",
+          "group": "connection@1"
         }
       ]
+    }
+  },
+  "configuration": {
+    "type": "object",
+    "title": "BSP Configuration",
+    "properties": {
+      "bsp.favoriteTargets": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "default": [],
+        "description": "List of favorite build target URIs"
+      },
+      "bsp.xcode.targets": {
+        "type": "object",
+        "default": {},
+        "description": "Saved Xcode target configurations (scheme and destination selections)",
+        "additionalProperties": {
+          "type": "object",
+          "properties": {
+            "selectedScheme": {
+              "type": "string",
+              "description": "Selected Xcode scheme"
+            },
+            "selectedDestination": {
+              "type": "string", 
+              "description": "Selected Xcode destination"
+            },
+            "lastUpdated": {
+              "type": "string",
+              "description": "Last update timestamp"
+            }
+          }
+        }
+      }
     }
   },
   "breakpoints": [
