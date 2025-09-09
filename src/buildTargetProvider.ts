@@ -200,7 +200,15 @@ export class BuildTargetItem extends vscode.TreeItem {
             return this.itemType;
         }
 
-        const contextValues = [];
+        const contextValues = ['buildTarget'];
+        
+        // Debug logging
+        console.log(`🔍 Target capabilities for ${target.displayName || target.id.uri}:`, {
+            canCompile: target.capabilities.canCompile,
+            canTest: target.capabilities.canTest,
+            canRun: target.capabilities.canRun,
+            canDebug: target.capabilities.canDebug
+        });
         
         if (target.capabilities.canCompile) {
             contextValues.push('canCompile');
@@ -214,19 +222,15 @@ export class BuildTargetItem extends vscode.TreeItem {
             contextValues.push('canRun');
         }
 
-        // Determine primary action based on tags and capabilities
-        if (target.tags.includes('test') && target.capabilities.canTest) {
-            return 'testTarget';
-        } else if (target.tags.includes('application') && target.capabilities.canRun) {
-            if (target.capabilities.canDebug) {
-                return 'debugTarget';
-            }
-            return 'runTarget';
-        } else if (target.capabilities.canCompile) {
-            return 'buildTarget';
+        if (target.capabilities.canDebug) {
+            contextValues.push('canDebug');
         }
 
-        return 'buildTarget';
+        const result = contextValues.join(' ');
+        console.log(`🎯 Context value for ${target.displayName || target.id.uri}: "${result}"`);
+
+        // Return combined context value with all capabilities
+        return result;
     }
 
     private getIcon(): vscode.ThemeIcon {

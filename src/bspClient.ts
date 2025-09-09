@@ -1,6 +1,4 @@
 import * as vscode from 'vscode';
-import * as path from 'path';
-import * as fs from 'fs/promises';
 import { 
     createMessageConnection, 
     MessageConnection, 
@@ -8,10 +6,9 @@ import {
     StreamMessageWriter 
 } from 'vscode-jsonrpc/node';
 import { spawn, ChildProcess } from 'child_process';
-import { log, logError, logInfo } from './logger';
+import { logError, logInfo } from './logger';
 import {
     BuildTarget,
-    BuildTargetIdentifier,
     WorkspaceBuildTargetsResult,
     CompileParams,
     CompileResult,
@@ -21,7 +18,6 @@ import {
     RunResult,
     InitializeBuildParams,
     InitializeBuildResult,
-    BuildClientCapabilities,
     PublishDiagnosticsParams,
     StatusCode,
     DebugSessionParams,
@@ -45,7 +41,7 @@ export class BspClient {
     private connectionDetails: BspConnectionDetails | undefined;
     private diagnosticsCollection: vscode.DiagnosticCollection;
 
-    constructor(workspaceUri: vscode.Uri) {
+    constructor(workspaceUri: vscode.Uri, private configPath?: string) {
         this.workspaceUri = workspaceUri;
         this.diagnosticsCollection = vscode.languages.createDiagnosticCollection('bsp');
     }
@@ -211,27 +207,39 @@ export class BspClient {
     }
 
     private async findBspConnectionDetails(): Promise<BspConnectionDetails | undefined> {
-        const bspDir = vscode.Uri.joinPath(this.workspaceUri, '.bsp');
-        
         try {
-            const entries = await vscode.workspace.fs.readDirectory(bspDir);
+            let configFile: vscode.Uri;
             
-            for (const [name, type] of entries) {
-                if (type === vscode.FileType.File && name.endsWith('.json')) {
-                    const configFile = vscode.Uri.joinPath(bspDir, name);
-                    const content = await vscode.workspace.fs.readFile(configFile);
-                    const config = JSON.parse(content.toString());
-                    
-                    if (config.name && config.argv) {
-                        return {
-                            name: config.name,
-                            version: config.version || '1.0.0',
-                            bspVersion: config.bspVersion || '2.1.0',
-                            languages: config.languages || [],
-                            argv: config.argv
-                        };
-                    }
+            if (this.configPath) {
+                // Use specific config file path
+                configFile = vscode.Uri.file(this.configPath);
+            } else {
+                // Find first available config in .bsp directory
+                const bspDir = vscode.Uri.joinPath(this.workspaceUri, '.bsp');
+                const entries = await vscode.workspace.fs.readDirectory(bspDir);
+                
+                const jsonFile = entries.find(([name, type]) => 
+                    type === vscode.FileType.File && name.endsWith('.json')
+                );
+                
+                if (!jsonFile) {
+                    return undefined;
                 }
+                
+                configFile = vscode.Uri.joinPath(bspDir, jsonFile[0]);
+            }
+            
+            const content = await vscode.workspace.fs.readFile(configFile);
+            const config = JSON.parse(content.toString());
+            
+            if (config.name && config.argv) {
+                return {
+                    name: config.name,
+                    version: config.version || '1.0.0',
+                    bspVersion: config.bspVersion || '2.1.0',
+                    languages: config.languages || [],
+                    argv: config.argv
+                };
             }
         } catch (error) {
             console.error('Error reading BSP configuration:', error);
@@ -481,7 +489,7 @@ export class BspClient {
         }
     }
 
-    private async startVSCodeDebugSession(targetId: string, config: vscode.DebugConfiguration): Promise<void> {
+    private async startVSCodeDebugSession(_targetId: string, config: vscode.DebugConfiguration): Promise<void> {
         const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
         if (!workspaceFolder) {
             throw new Error('No workspace folder available');
@@ -494,7 +502,7 @@ export class BspClient {
     }
 
     private generateOriginId(): string {
-        return `vscode-bsp-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+        return `vscode-bsp-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`;
     }
 
     get connected(): boolean {

@@ -24,7 +24,8 @@
       {
         "command": "bsp.refresh",
         "title": "Refresh Build Targets",
-        "category": "BSP"
+        "category": "BSP",
+        "icon": "$(refresh)"
       },
       {
         "command": "bsp.showTargets",
@@ -34,27 +35,89 @@
       {
         "command": "bsp.compile",
         "title": "Compile Target",
-        "category": "BSP"
+        "category": "BSP",
+        "icon": "$(rocket)"
       },
       {
         "command": "bsp.test",
         "title": "Test Target",
-        "category": "BSP"
+        "category": "BSP",
+        "icon": "$(check-all)"
       },
       {
         "command": "bsp.run",
         "title": "Run Target",
-        "category": "BSP"
+        "category": "BSP",
+        "icon": "$(triangle-right)"
       },
       {
         "command": "bsp.debug",
         "title": "Debug Target",
-        "category": "BSP"
+        "category": "BSP",
+        "icon": "$(bug)"
       },
       {
         "command": "bsp.showOutput",
         "title": "Show BSP Output",
         "category": "BSP"
+      },
+      {
+        "command": "bsp.discoverConnections",
+        "title": "Discover BSP Connections",
+        "category": "BSP",
+        "icon": "$(search)"
+      },
+      {
+        "command": "bsp.connectAll",
+        "title": "Connect All BSP Servers",
+        "category": "BSP",
+        "icon": "$(plug)"
+      },
+      {
+        "command": "bsp.disconnectAll",
+        "title": "Disconnect All BSP Servers",
+        "category": "BSP",
+        "icon": "$(debug-disconnect)"
+      },
+      {
+        "command": "bsp.connectServer",
+        "title": "Connect to Server",
+        "category": "BSP",
+        "icon": "$(debug-start)"
+      },
+      {
+        "command": "bsp.disconnectServer",
+        "title": "Disconnect from Server",
+        "category": "BSP",
+        "icon": "$(debug-stop)"
+      },
+      {
+        "command": "bsp.compileDisabled",
+        "title": "Compile Not Supported",
+        "category": "BSP",
+        "icon": "$(rocket)",
+        "enablement": "false"
+      },
+      {
+        "command": "bsp.testDisabled",
+        "title": "Test Not Supported",
+        "category": "BSP",
+        "icon": "$(check-all)",
+        "enablement": "false"
+      },
+      {
+        "command": "bsp.runDisabled",
+        "title": "Run Not Supported",
+        "category": "BSP",
+        "icon": "$(triangle-right)",
+        "enablement": "false"
+      },
+      {
+        "command": "bsp.debugDisabled",
+        "title": "Debug Not Supported",
+        "category": "BSP",
+        "icon": "$(bug)",
+        "enablement": "false"
       }
     ],
     "views": {
@@ -72,27 +135,72 @@
           "command": "bsp.refresh",
           "when": "view == bspTargets",
           "group": "navigation"
+        },
+        {
+          "command": "bsp.discoverConnections",
+          "when": "view == bspTargets",
+          "group": "navigation"
+        },
+        {
+          "command": "bsp.connectAll",
+          "when": "view == bspTargets",
+          "group": "navigation"
+        },
+        {
+          "command": "bsp.disconnectAll",
+          "when": "view == bspTargets",
+          "group": "navigation"
         }
       ],
       "view/item/context": [
         {
           "command": "bsp.compile",
-          "when": "view == bspTargets && viewItem == buildTarget",
-          "group": "inline"
+          "when": "view == bspTargets && viewItem =~ /buildTarget.*canCompile/",
+          "group": "inline@1"
         },
         {
           "command": "bsp.test",
-          "when": "view == bspTargets && viewItem == testTarget",
-          "group": "inline"
+          "when": "view == bspTargets && viewItem =~ /buildTarget.*canTest/",
+          "group": "inline@2"
         },
         {
           "command": "bsp.run",
-          "when": "view == bspTargets && viewItem == runTarget",
-          "group": "inline"
+          "when": "view == bspTargets && viewItem =~ /buildTarget.*canRun/",
+          "group": "inline@3"
         },
         {
           "command": "bsp.debug",
-          "when": "view == bspTargets && viewItem == debugTarget",
+          "when": "view == bspTargets && viewItem =~ /buildTarget.*canDebug/",
+          "group": "inline@4"
+        },
+        {
+          "command": "bsp.compileDisabled",
+          "when": "view == bspTargets && viewItem =~ /^buildTarget/ && !(viewItem =~ /canCompile/)",
+          "group": "inline@1"
+        },
+        {
+          "command": "bsp.testDisabled",
+          "when": "view == bspTargets && viewItem =~ /^buildTarget/ && !(viewItem =~ /canTest/)",
+          "group": "inline@2"
+        },
+        {
+          "command": "bsp.runDisabled",
+          "when": "view == bspTargets && viewItem =~ /^buildTarget/ && !(viewItem =~ /canRun/)",
+          "group": "inline@3"
+        },
+        {
+          "command": "bsp.debugDisabled",
+          "when": "view == bspTargets && viewItem =~ /^buildTarget/ && !(viewItem =~ /canDebug/)",
+          "group": "inline@4"
+        },
+        {
+          "command": "bsp.connectServer",
+          "when": "view == bspTargets && viewItem == disconnectedBspServer",
+          "group": "inline"
+        },
+        {
+          "command": "bsp.disconnectServer",
+          "when": "view == bspTargets && viewItem == connectedBspServer",
           "group": "inline"
         }
       ]
