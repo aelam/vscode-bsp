@@ -8,6 +8,7 @@ import {
     StreamMessageWriter 
 } from 'vscode-jsonrpc/node';
 import { spawn, ChildProcess } from 'child_process';
+import { log, logError, logInfo } from './logger';
 import {
     BuildTarget,
     BuildTargetIdentifier,
@@ -51,7 +52,7 @@ export class BspClient {
 
     async connect(): Promise<void> {
         if (this.isConnected) {
-            console.log('BSP client already connected');
+            logInfo('BSP client already connected');
             return;
         }
 
@@ -74,9 +75,9 @@ export class BspClient {
             await this.initializeConnection();
 
             this.isConnected = true;
-            console.log('✅ BSP client connected successfully');
+            logInfo('✅ BSP client connected successfully');
         } catch (error) {
-            console.error('❌ Failed to connect BSP client:', error);
+            logError('❌ Failed to connect BSP client', error);
             throw error;
         }
     }

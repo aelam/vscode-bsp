@@ -50,6 +50,11 @@
         "command": "bsp.debug",
         "title": "Debug Target",
         "category": "BSP"
+      },
+      {
+        "command": "bsp.showOutput",
+        "title": "Show BSP Output",
+        "category": "BSP"
       }
     ],
     "views": {
