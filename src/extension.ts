@@ -104,6 +104,31 @@ async function initializeBspExtension(context: vscode.ExtensionContext) {
         multiBspProvider?.refresh();
     });
 
+    const reloadCommand = vscode.commands.registerCommand('bsp.reload', async (item) => {
+        logInfo(`BSP reload command triggered for: ${item?.connectionId || 'global'}`);
+        
+        try {
+            if (item?.connectionId && connectionManager) {
+                // Reload specific connection
+                const connection = connectionManager.getConnection(item.connectionId);
+                if (connection?.connected) {
+                    await connection.client.reload();
+                    vscode.window.showInformationMessage('BSP workspace reloaded');
+                } else {
+                    vscode.window.showErrorMessage('BSP server not connected');
+                }
+            } else if (bspClient?.connected) {
+                // Fallback to single client
+                await bspClient.reload();
+            } else {
+                vscode.window.showErrorMessage('No BSP connection available');
+            }
+        } catch (error) {
+            logError('Failed to reload BSP workspace', error);
+            vscode.window.showErrorMessage(`Failed to reload: ${error}`);
+        }
+    });
+
     const showTargetsCommand = vscode.commands.registerCommand('bsp.showTargets', () => {
         logInfo('BSP show targets command triggered');
         vscode.commands.executeCommand('bspTargets.focus');
@@ -374,6 +399,7 @@ async function initializeBspExtension(context: vscode.ExtensionContext) {
 
     context.subscriptions.push(
         refreshCommand,
+        reloadCommand,
         showTargetsCommand,
         discoverConnectionsCommand,
         connectAllCommand,
