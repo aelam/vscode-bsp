@@ -7,13 +7,14 @@ import { logError, logInfo } from './logger';
 export class MultiBspProvider implements vscode.TreeDataProvider<BspTreeItem> {
     private _onDidChangeTreeData = new vscode.EventEmitter<BspTreeItem | undefined | null | void>();
     readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
-    private xcodeManager = new XcodeManager();
     private favoriteTargets = new Set<string>();
     private context?: vscode.ExtensionContext;
     private targetToConnectionMap = new Map<string, string>(); // targetId -> connectionId
+    private xcodeManager: XcodeManager;
 
     constructor(private connectionManager: BspConnectionManager, context?: vscode.ExtensionContext) {
         this.context = context;
+        this.xcodeManager = new XcodeManager(context);
         
         // Listen to connection changes
         this.connectionManager.onDidChangeConnections(() => {
@@ -408,19 +409,26 @@ export class MultiBspProvider implements vscode.TreeDataProvider<BspTreeItem> {
                 ));
             }
             
-            // Add scheme selector
-            children.push(new BspTreeItem(
-                'Select Scheme...',
+            // Add configuration selector
+            const configSelector = new BspTreeItem(
+                'Select Configuration...',
                 vscode.TreeItemCollapsibleState.None,
-                'xcodeSchemeSelector'
-            ));
+                'xcodeConfigurationSelector'
+            );
+            configSelector.buildTarget = target;
+            configSelector.connectionId = element.connectionId;
+            logInfo(`Created configuration selector for target: ${target.id.uri} with connectionId: ${element.connectionId}`);
+            children.push(configSelector);
             
             // Add destination selector
-            children.push(new BspTreeItem(
+            const destSelector = new BspTreeItem(
                 'Select Destination...',
                 vscode.TreeItemCollapsibleState.None,
                 'xcodeDestinationSelector'
-            ));
+            );
+            destSelector.buildTarget = target;
+            destSelector.connectionId = element.connectionId;
+            children.push(destSelector);
         }
 
         // Add dependencies
@@ -606,17 +614,19 @@ export class BspTreeItem extends vscode.TreeItem {
     constructor(
         label: string,
         collapsibleState: vscode.TreeItemCollapsibleState,
-        public readonly type: 'connection' | 'buildTarget' | 'capability' | 'dependencies' | 'languages' | 'status' | 'error' | 'xcodeConfig' | 'xcodeSchemeSelector' | 'xcodeDestinationSelector' | 'favoritesGroup'
+        public readonly type: 'connection' | 'buildTarget' | 'capability' | 'dependencies' | 'languages' | 'status' | 'error' | 'xcodeConfig' | 'xcodeConfigurationSelector' | 'xcodeDestinationSelector' | 'favoritesGroup'
     ) {
         super(label, collapsibleState);
         
-        // Set icons for different item types
+        // Set icons and context values for different item types
         if (type === 'xcodeConfig') {
             this.iconPath = new vscode.ThemeIcon('settings-gear');
-        } else if (type === 'xcodeSchemeSelector') {
+        } else if (type === 'xcodeConfigurationSelector') {
             this.iconPath = new vscode.ThemeIcon('list-selection');
+            this.contextValue = 'xcodeConfigurationSelector';
         } else if (type === 'xcodeDestinationSelector') {
             this.iconPath = new vscode.ThemeIcon('device-mobile');
+            this.contextValue = 'xcodeDestinationSelector';
         } else if (type === 'favoritesGroup') {
             this.iconPath = new vscode.ThemeIcon('star');
         }

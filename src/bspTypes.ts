@@ -18,26 +18,19 @@ export interface BuildTarget {
 }
 
 export interface XcodeTarget {
-    projectPath: string;
-    schemes: XcodeScheme[];
+    configurations: string[];
     destinations: XcodeDestination[];
-    selectedScheme?: string;
-    selectedDestination?: string;
-}
-
-export interface XcodeScheme {
-    name: string;
-    type: 'run' | 'test' | 'archive' | 'analyze';
-    buildable: boolean;
+    selectedConfiguration?: string;
+    selectedDestination?: XcodeDestination;
 }
 
 export interface XcodeDestination {
     id: string;
     name: string;
     platform: 'iOS' | 'macOS' | 'watchOS' | 'tvOS';
-    deviceType: 'simulator' | 'device' | 'mac';
-    version?: string;
-    identifier?: string;
+    deviceType: 'simulator' | 'device';
+    osVersion?: string;
+    simulator?: boolean;
 }
 
 export interface BuildTargetCapabilities {

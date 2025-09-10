@@ -337,14 +337,29 @@ async function initializeBspExtension(context: vscode.ExtensionContext) {
     });
 
     // Xcode-specific commands
-    const selectXcodeSchemeCommand = vscode.commands.registerCommand('bsp.selectXcodeScheme', async (item) => {
-        if (!multiBspProvider || !item?.buildTarget) return;
+    const selectXcodeConfigurationCommand = vscode.commands.registerCommand('bsp.selectXcodeConfiguration', async (item) => {
+        logInfo(`selectXcodeConfiguration command triggered with item: ${JSON.stringify(item)}`);
+        
+        if (!multiBspProvider) {
+            logError('multiBspProvider is not initialized');
+            return;
+        }
+        
+        if (!item) {
+            logError('item is undefined');
+            return;
+        }
+        
+        if (!item.buildTarget) {
+            logError('item.buildTarget is undefined');
+            return;
+        }
         
         const xcodeManager = multiBspProvider.getXcodeManager();
-        const scheme = await xcodeManager.selectScheme(item.buildTarget.id.uri);
+        const configuration = await xcodeManager.selectConfiguration(item.buildTarget.id.uri);
         
-        if (scheme) {
-            vscode.window.showInformationMessage(`Selected scheme: ${scheme}`);
+        if (configuration) {
+            vscode.window.showInformationMessage(`Selected configuration: ${configuration}`);
         }
     });
 
@@ -355,11 +370,7 @@ async function initializeBspExtension(context: vscode.ExtensionContext) {
         const destination = await xcodeManager.selectDestination(item.buildTarget.id.uri);
         
         if (destination) {
-            const xcodeDetails = xcodeManager.getXcodeDetails(item.buildTarget.id.uri);
-            const dest = xcodeDetails?.destinations.find(d => d.id === destination);
-            if (dest) {
-                vscode.window.showInformationMessage(`Selected destination: ${dest.name}`);
-            }
+            vscode.window.showInformationMessage(`Selected destination: ${destination}`);
         }
     });
 
@@ -414,7 +425,7 @@ async function initializeBspExtension(context: vscode.ExtensionContext) {
         testDisabledCommand,
         runDisabledCommand,
         debugDisabledCommand,
-        selectXcodeSchemeCommand,
+        selectXcodeConfigurationCommand,
         selectXcodeDestinationCommand,
         addToFavoritesCommand,
         removeFromFavoritesCommand,
