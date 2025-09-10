@@ -17,6 +17,13 @@ export class MultiBspProvider implements vscode.TreeDataProvider<BspTreeItem> {
         
         // Listen to connection changes
         this.connectionManager.onDidChangeConnections(() => {
+            this.rebuildTargetMappings();
+            this.refresh();
+        });
+        
+        // Listen to targets updates
+        this.connectionManager.onDidUpdateTargets(() => {
+            this.rebuildTargetMappings();
             this.refresh();
         });
         
@@ -39,23 +46,23 @@ export class MultiBspProvider implements vscode.TreeDataProvider<BspTreeItem> {
 
     private async getFavoriteTargetItems(): Promise<BspTreeItem[]> {
         const favoriteItems: BspTreeItem[] = [];
-        const connections = this.connectionManager.getAllConnections();
         const processedFavorites = new Set<string>();
         
-        // First, try to get favorites from connected servers
-        for (const connection of connections) {
-            if (!connection.connected) continue;
+        // Process all favorite targets with known connection mappings first
+        for (const favoriteId of this.favoriteTargets) {
+            const connectionId = this.targetToConnectionMap.get(favoriteId);
+            if (!connectionId) continue;
+            
+            const connection = this.connectionManager.getConnection(connectionId);
+            if (!connection || !connection.connected) continue;
             
             try {
-                const targets = await connection.client.getBuildTargets();
-                const favoriteTargets = targets.filter(target => 
-                    this.favoriteTargets.has(target.id.uri) && !processedFavorites.has(target.id.uri)
-                );
+                // Use cached targets instead of making new requests
+                const targets = connection.client.targets;
+                const target = targets.find(t => t.id.uri === favoriteId);
                 
-                for (const target of favoriteTargets) {
-                    // Update target-to-connection mapping
-                    this.targetToConnectionMap.set(target.id.uri, connection.id);
-                    processedFavorites.add(target.id.uri);
+                if (target) {
+                    processedFavorites.add(favoriteId);
                     
                     // 检查是否是Xcode项目
                     const isXcode = this.xcodeManager.isXcodeTarget(target);
@@ -77,6 +84,32 @@ export class MultiBspProvider implements vscode.TreeDataProvider<BspTreeItem> {
                     item.iconPath = this.getBuildTargetIcon(target);
                     
                     favoriteItems.push(item);
+                } else {
+                    // Target not found in cache, show as connected but not loaded
+                    const displayName = this.extractTargetNameFromUri(favoriteId);
+                    const item = new BspTreeItem(
+                        `${displayName} (${connection.config.displayName})`,
+                        vscode.TreeItemCollapsibleState.None,
+                        'buildTarget'
+                    );
+                    
+                    item.connectionId = connection.id;
+                    item.buildTarget = {
+                        id: { uri: favoriteId },
+                        displayName: displayName,
+                        baseDirectory: '',
+                        tags: [],
+                        capabilities: { canCompile: false, canTest: false, canRun: false, canDebug: false },
+                        languageIds: [],
+                        dependencies: []
+                    };
+                    item.description = '[Loading...]';
+                    item.tooltip = `Target: ${displayName}\nServer: ${connection.config.displayName}\nStatus: Loading...`;
+                    item.contextValue = 'buildTarget favorite loading';
+                    item.iconPath = new vscode.ThemeIcon('loading~spin');
+                    
+                    favoriteItems.push(item);
+                    processedFavorites.add(favoriteId);
                 }
             } catch (error) {
                 // Ignore errors for individual connections, we'll handle disconnected ones later
@@ -155,6 +188,35 @@ export class MultiBspProvider implements vscode.TreeDataProvider<BspTreeItem> {
         }
     }
 
+    private rebuildTargetMappings(): void {
+        // Rebuild targetToConnectionMap for all favorite targets
+        const connections = this.connectionManager.getAllConnections();
+        
+        for (const favoriteId of this.favoriteTargets) {
+            // Find the connection that contains this target
+            let found = false;
+            for (const connection of connections) {
+                if (connection.connected && connection.client.targets.length > 0) {
+                    const target = connection.client.targets.find(t => t.id.uri === favoriteId);
+                    if (target) {
+                        const oldConnectionId = this.targetToConnectionMap.get(favoriteId);
+                        if (oldConnectionId !== connection.id) {
+                            this.targetToConnectionMap.set(favoriteId, connection.id);
+                            logInfo(`Updated mapping: ${favoriteId} -> ${connection.config.displayName}`);
+                        }
+                        found = true;
+                        break;
+                    }
+                }
+            }
+            
+            // If target not found in any connected server, keep existing mapping for now
+            if (!found && !this.targetToConnectionMap.has(favoriteId)) {
+                logInfo(`No mapping found for favorite: ${favoriteId}`);
+            }
+        }
+    }
+
     private async saveFavoriteTargets(): Promise<void> {
         try {
             const favorites = Array.from(this.favoriteTargets);
@@ -175,8 +237,26 @@ export class MultiBspProvider implements vscode.TreeDataProvider<BspTreeItem> {
         }
     }
 
-    async addToFavorites(targetId: string): Promise<void> {
+    async addToFavorites(targetId: string, connectionId?: string): Promise<void> {
         this.favoriteTargets.add(targetId);
+        
+        // Update targetToConnectionMap for the new favorite
+        if (connectionId) {
+            this.targetToConnectionMap.set(targetId, connectionId);
+        } else {
+            // Fallback: search in all connections
+            const connections = this.connectionManager.getAllConnections();
+            for (const connection of connections) {
+                if (connection.connected && connection.client.targets.length > 0) {
+                    const target = connection.client.targets.find(t => t.id.uri === targetId);
+                    if (target) {
+                        this.targetToConnectionMap.set(targetId, connection.id);
+                        break;
+                    }
+                }
+            }
+        }
+        
         await this.saveFavoriteTargets();
         this.refresh();
         logInfo(`Added ${targetId} to favorites`);
@@ -268,7 +348,13 @@ export class MultiBspProvider implements vscode.TreeDataProvider<BspTreeItem> {
         }
 
         try {
-            const targets = await connection.client.getBuildTargets();
+            // Use cached targets if available, otherwise make a request
+            let targets = connection.client.targets;
+            if (targets.length === 0) {
+                // Only make request if cache is empty
+                targets = await connection.client.getBuildTargets();
+            }
+            
             return targets.map(target => {
                 // 检查是否是Xcode项目
                 const isXcode = this.xcodeManager.isXcodeTarget(target);

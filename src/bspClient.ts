@@ -42,10 +42,12 @@ export class BspClient {
     private diagnosticsCollection: vscode.DiagnosticCollection;
     private activeRequests = new Map<string, Promise<any>>();
     private requestCounter = 0;
+    private onTargetsUpdated?: () => void;
 
-    constructor(workspaceUri: vscode.Uri, private configPath?: string) {
+    constructor(workspaceUri: vscode.Uri, private configPath?: string, onTargetsUpdated?: () => void) {
         this.workspaceUri = workspaceUri;
         this.diagnosticsCollection = vscode.languages.createDiagnosticCollection('bsp');
+        this.onTargetsUpdated = onTargetsUpdated;
     }
 
     async connect(): Promise<void> {
@@ -121,6 +123,12 @@ export class BspClient {
             const result: WorkspaceBuildTargetsResult = await this.connection.sendRequest('workspace/buildTargets');
             this.buildTargets = result.targets;
             log(`✅ BSP Client: Found ${this.buildTargets.length} build targets: ${this.buildTargets.map(t => t.displayName || t.id.uri).join(', ')}`);
+            
+            // Notify that targets have been updated
+            if (this.onTargetsUpdated) {
+                this.onTargetsUpdated();
+            }
+            
             return this.buildTargets;
         } catch (error) {
             logError('❌ Failed to get build targets', error);

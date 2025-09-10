@@ -367,7 +367,7 @@ async function initializeBspExtension(context: vscode.ExtensionContext) {
     const addToFavoritesCommand = vscode.commands.registerCommand('bsp.addToFavorites', async (item) => {
         if (!multiBspProvider || !item?.buildTarget) return;
         
-        await multiBspProvider.addToFavorites(item.buildTarget.id.uri);
+        await multiBspProvider.addToFavorites(item.buildTarget.id.uri, item.connectionId);
         vscode.window.showInformationMessage(`Added "${item.buildTarget.displayName || item.buildTarget.id.uri}" to favorites`);
     });
 

@@ -23,6 +23,8 @@ export class BspConnectionManager {
     private connections = new Map<string, BspConnection>();
     private _onDidChangeConnections = new vscode.EventEmitter<void>();
     readonly onDidChangeConnections = this._onDidChangeConnections.event;
+    private _onDidUpdateTargets = new vscode.EventEmitter<string>(); // connectionId
+    readonly onDidUpdateTargets = this._onDidUpdateTargets.event;
 
     constructor() {}
 
@@ -55,7 +57,10 @@ export class BspConnectionManager {
 
     async addConnection(config: BspConnectionConfig): Promise<string> {
         const connectionId = `${config.name}_${Date.now()}`;
-        const client = new BspClient(config.workspaceUri, config.configPath);
+        const client = new BspClient(config.workspaceUri, config.configPath, () => {
+            // Notify when targets are updated for this connection
+            this._onDidUpdateTargets.fire(connectionId);
+        });
         
         const connection: BspConnection = {
             id: connectionId,
