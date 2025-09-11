@@ -120,8 +120,8 @@
         "enablement": "false"
       },
       {
-        "command": "bsp.selectXcodeScheme",
-        "title": "Select Xcode Scheme",
+        "command": "bsp.selectXcodeConfiguration",
+        "title": "Select Xcode Configuration",
         "category": "BSP",
         "icon": "$(list-selection)"
       },
@@ -234,8 +234,8 @@
           "group": "inline"
         },
         {
-          "command": "bsp.selectXcodeScheme",
-          "when": "view == bspTargets && viewItem == xcodeSchemeSelector",
+          "command": "bsp.selectXcodeConfiguration",
+          "when": "view == bspTargets && viewItem == xcodeConfigurationSelector",
           "group": "inline"
         },
         {
@@ -280,12 +280,12 @@
         "additionalProperties": {
           "type": "object",
           "properties": {
-            "selectedScheme": {
+            "selectedConfiguration": {
               "type": "string",
-              "description": "Selected Xcode scheme"
+              "description": "Selected Xcode configuration"
             },
             "selectedDestination": {
-              "type": "string", 
+              "type": "string",
               "description": "Selected Xcode destination"
             },
             "lastUpdated": {

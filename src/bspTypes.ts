@@ -17,7 +17,7 @@ export interface BuildTarget {
     data?: any;
 }
 
-export interface XcodeTarget {
+export interface XcodeData {
     configurations: string[];
     destinations: XcodeDestination[];
     selectedConfiguration?: string;
@@ -28,9 +28,10 @@ export interface XcodeDestination {
     id: string;
     name: string;
     platform: 'iOS' | 'macOS' | 'watchOS' | 'tvOS';
-    deviceType: 'simulator' | 'device';
-    osVersion?: string;
+    version?: string;
     simulator?: boolean;
+    isAvailable?: boolean;
+    isRunnable?: boolean;
 }
 
 export interface BuildTargetCapabilities {

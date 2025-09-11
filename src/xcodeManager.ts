@@ -1,9 +1,9 @@
 import * as vscode from 'vscode';
-import { BuildTarget, XcodeTarget, XcodeDestination } from './bspTypes';
+import { BuildTarget, XcodeData, XcodeDestination } from './bspTypes';
 import { logInfo, logError } from './logger';
 
 export class XcodeManager {
-    private xcodeData = new Map<string, XcodeTarget>();
+    private xcodeData = new Map<string, XcodeData>();
     private _onDidChangeConfiguration = new vscode.EventEmitter<string>();
     readonly onDidChangeConfiguration = this._onDidChangeConfiguration.event;
     private context?: vscode.ExtensionContext;
@@ -22,17 +22,17 @@ export class XcodeManager {
     /**
      * 提取Xcode项目数据
      */
-    extractXcodeData(target: BuildTarget): XcodeTarget | null {
+    extractXcodeData(target: BuildTarget): XcodeData | null {
         if (!this.isXcodeTarget(target)) {
             return null;
         }
 
         try {
-            let xcodeData: XcodeTarget;
+            let xcodeData: XcodeData;
             
             if (target.data && target.data.xcode) {
                 // 使用已存在的xcode数据，但确保格式正确
-                xcodeData = target.data.xcode as XcodeTarget;
+                xcodeData = target.data.xcode as XcodeData;
             } else {
                 // 从BSP数据中提取Xcode信息
                 xcodeData = {
@@ -107,9 +107,10 @@ export class XcodeManager {
         }
 
         const items = xcodeData.destinations.map(dest => ({
+            iconPath: this.getDestinationIcon(dest),
             label: dest.name,
-            description: `${dest.platform} ${dest.deviceType}`,
-            detail: dest.osVersion ? `Version ${dest.osVersion}` : undefined,
+            description: `${dest.platform} ${dest.simulator ? '(Simulator)' : '(Device)'} ${dest.version ? '- ' + dest.version : ''}` + (dest.isAvailable === false ? ' (Unavailable)' : ''), 
+            detail: dest.id,
             destination: dest
         }));
 
@@ -156,11 +157,11 @@ export class XcodeManager {
         const parts = [];
         
         if (xcodeData.selectedConfiguration) {
-            parts.push(`Config: ${xcodeData.selectedConfiguration}`);
+            parts.push(`Configuration: ${xcodeData.selectedConfiguration}`);
         }
         
         if (xcodeData.selectedDestination) {
-            parts.push(`Dest: ${xcodeData.selectedDestination.name}`);
+            parts.push(xcodeData.selectedDestination.name);
         }
 
         return parts.join(' | ');
@@ -296,4 +297,13 @@ export class XcodeManager {
 
         return args;
     }
+
+    getDestinationIcon(destination: XcodeDestination): vscode.ThemeIcon {
+        if (destination.simulator) {
+            return new vscode.ThemeIcon('device-mobile');
+        }
+        
+        return new vscode.ThemeIcon('device-desktop');
+    }
+
 }
