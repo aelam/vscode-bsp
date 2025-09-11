@@ -290,7 +290,7 @@ export class MultiBspProvider implements vscode.TreeDataProvider<BspTreeItem> {
             // Add favorites group if there are any favorite targets
             if (this.favoriteTargets.size > 0) {
                 const favoritesItem = new BspTreeItem(
-                    `⭐ Favorites (${this.favoriteTargets.size})`,
+                    `Favorites (${this.favoriteTargets.size})`,
                     vscode.TreeItemCollapsibleState.Expanded,
                     'favoritesGroup'
                 );
