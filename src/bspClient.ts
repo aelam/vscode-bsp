@@ -44,16 +44,15 @@ export class BspClient {
     private requestCounter = 0;
     private onTargetsUpdated?: () => void;
 
-    constructor(workspaceUri: vscode.Uri, private configPath?: string, onTargetsUpdated?: () => void, private xcodeManager?: any) {
+    constructor(workspaceUri: vscode.Uri, private configPath?: string, onTargetsUpdated?: () => void, private buildSystemManager?: any) {
         this.workspaceUri = workspaceUri;
         this.diagnosticsCollection = vscode.languages.createDiagnosticCollection('bsp');
         this.onTargetsUpdated = onTargetsUpdated;
         
-        // Debug: Check XcodeManager instance
-        if (this.xcodeManager) {
-            log(`🔧 BspClient: XcodeManager instance ID: ${this.xcodeManager._instanceId || 'no-id'}`);
-            log(`🔧 BspClient: XcodeManager xcodeData Map size: ${this.xcodeManager.getXcodeDataSize()}`);
-            log(`🔧 BspClient: XcodeManager xcodeData keys: [${this.xcodeManager.getXcodeDataKeys().join(', ')}]`);
+        // Debug: Check BuildSystemManager instance
+        if (this.buildSystemManager) {
+            log(`🔧 BspClient: BuildSystemManager instance ID: ${this.buildSystemManager.instanceId || 'no-id'}`);
+            log(`🔧 BspClient: BuildSystemManager debug info: ${JSON.stringify(this.buildSystemManager.getDebugInfo(), null, 2)}`);
         }
     }
 
@@ -169,38 +168,21 @@ export class BspClient {
 
             let compileArgs: string[] = [];
             
-            // Get user's selected configuration and destination from XcodeManager (if available)
-            if (this.xcodeManager && this.xcodeManager.isXcodeTarget(target)) {
-                log(`🔧 Using XcodeManager instance: ${this.xcodeManager.constructor.name}`);
-                log(`🔧 XcodeManager instance ID: ${this.xcodeManager._instanceId}`);
-                log(`🔧 Target ID: ${targetId}`);
-                log(`🔧 Pre-extraction xcodeData Map size: ${this.xcodeManager.getXcodeDataSize()}`);
-                log(`🔧 Pre-extraction xcodeData keys: [${this.xcodeManager.getXcodeDataKeys().join(', ')}]`);
+            // Get compile arguments from BuildSystemManager (if available)
+            if (this.buildSystemManager && this.buildSystemManager.canHandle(target)) {
+                log(`🔧 Using BuildSystemManager for target: ${targetId}`);
                 
-                // Force extract xcode data to ensure it's available
-                // log(`🔧 Extracting xcode data for target...`);
-                // const extractedData = this.xcodeManager.extractXcodeData(target);
-                // log(`🔧 Extracted data: ${JSON.stringify(extractedData, null, 2)}`);
-                
-                const selectedConfiguration = this.xcodeManager.getSelectedConfiguration(targetId);
-                const selectedDestination = this.xcodeManager.getSelectedDestination(targetId);
-                
-                log(`🔧 Selected configuration: ${selectedConfiguration || 'none'}`);
-                log(`🔧 Selected destination: ${selectedDestination?.id || 'none'}`);
-                
-                if (selectedConfiguration) {
-                    compileArgs.push('-configuration', selectedConfiguration);
-                    log(`🔧 Added configuration argument: -configuration ${selectedConfiguration}`);
+                try {
+                    compileArgs = await this.buildSystemManager.getCompileArguments(target);
+                    log(`🔧 Generated compile arguments: [${compileArgs.join(', ')}]`);
+                } catch (error) {
+                    logError('Failed to get compile arguments from BuildSystemManager', error);
                 }
-                if (selectedDestination) {
-                    compileArgs.push('-destination', `id=${selectedDestination.id}`);
-                    log(`🔧 Added destination argument: -destination id=${selectedDestination.id}`);
-                }
-            } else if (this.xcodeManager) {
-                log(`⚠️ Target ${targetId} is not recognized as Xcode target`);
+            } else if (this.buildSystemManager) {
+                log(`⚠️ Target ${targetId} is not supported by BuildSystemManager`);
                 log(`⚠️ Target dataKind: ${target.dataKind}, data.xcode: ${!!target.data?.xcode}`);
             } else {
-                log(`⚠️ XcodeManager not available`);
+                log(`⚠️ BuildSystemManager not available`);
             }
 
             const params: CompileParams = {
@@ -226,16 +208,13 @@ export class BspClient {
 
             let testArgs: string[] = [];
             
-            // Get user's selected configuration and destination from XcodeManager (if available)
-            if (this.xcodeManager && this.xcodeManager.isXcodeTarget(target)) {
-                const selectedConfiguration = this.xcodeManager.getSelectedConfiguration(targetId);
-                const selectedDestination = this.xcodeManager.getSelectedDestination(targetId);
-                
-                if (selectedConfiguration) {
-                    testArgs.push('-configuration', selectedConfiguration);
-                }
-                if (selectedDestination) {
-                    testArgs.push('-destination', `id=${selectedDestination.id}`);
+            // Get test arguments from BuildSystemManager (if available)
+            if (this.buildSystemManager && this.buildSystemManager.canHandle(target)) {
+                try {
+                    testArgs = await this.buildSystemManager.getTestArguments(target);
+                    log(`🔧 Generated test arguments: [${testArgs.join(', ')}]`);
+                } catch (error) {
+                    logError('Failed to get test arguments from BuildSystemManager', error);
                 }
             }
 
@@ -262,16 +241,13 @@ export class BspClient {
 
             let runArgs: string[] = [];
             
-            // Get user's selected configuration and destination from XcodeManager (if available)
-            if (this.xcodeManager && this.xcodeManager.isXcodeTarget(target)) {
-                const selectedConfiguration = this.xcodeManager.getSelectedConfiguration(targetId);
-                const selectedDestination = this.xcodeManager.getSelectedDestination(targetId);
-                
-                if (selectedConfiguration) {
-                    runArgs.push('-configuration', selectedConfiguration);
-                }
-                if (selectedDestination) {
-                    runArgs.push('-destination', `id=${selectedDestination.id}`);
+            // Get run arguments from BuildSystemManager (if available)
+            if (this.buildSystemManager && this.buildSystemManager.canHandle(target)) {
+                try {
+                    runArgs = await this.buildSystemManager.getRunArguments(target);
+                    log(`🔧 Generated run arguments: [${runArgs.join(', ')}]`);
+                } catch (error) {
+                    logError('Failed to get run arguments from BuildSystemManager', error);
                 }
             }
 

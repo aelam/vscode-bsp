@@ -120,16 +120,10 @@
         "enablement": "false"
       },
       {
-        "command": "bsp.selectXcodeConfiguration",
-        "title": "Select Xcode Configuration",
+        "command": "bsp.handleDynamicSelector",
+        "title": "Handle Dynamic Selector",
         "category": "BSP",
         "icon": "$(list-selection)"
-      },
-      {
-        "command": "bsp.selectXcodeDestination",
-        "title": "Select Xcode Destination",
-        "category": "BSP",
-        "icon": "$(device-mobile)"
       },
       {
         "command": "bsp.addToFavorites",
@@ -234,13 +228,8 @@
           "group": "inline"
         },
         {
-          "command": "bsp.selectXcodeConfiguration",
-          "when": "view == bspTargets && viewItem == xcodeConfigurationSelector",
-          "group": "inline"
-        },
-        {
-          "command": "bsp.selectXcodeDestination",
-          "when": "view == bspTargets && viewItem == xcodeDestinationSelector",
+          "command": "bsp.handleDynamicSelector",
+          "when": "view == bspTargets && viewItem == dynamicSelector",
           "group": "inline"
         },
         {

@@ -4,6 +4,7 @@ import { BuildTargetProvider } from './buildTargetProvider';
 import { BspConnectionManager } from './bspConnectionManager';
 import { MultiBspProvider } from './multiBspProvider';
 import { BspDebugConfigurationProvider, BspDebugAdapterDescriptorFactory } from './debugProvider';
+import { BuildSystemManager } from './buildSystemManager';
 import { initializeLogger, log, logError, logInfo } from './logger';
 
 let bspClient: BspClient | undefined;
@@ -188,19 +189,18 @@ async function initializeBspExtension(context: vscode.ExtensionContext) {
     vscode.commands.executeCommand('setContext', 'bsp.enabled', true);
     logInfo('BSP context enabled');
 
-    // Initialize connection manager and multi-BSP provider
-    // Create a temporary connection manager first
+    // Initialize build system manager and connection manager
+    const buildSystemManager = new BuildSystemManager(context);
+    
+    // Create connection manager with build system manager
     const tempConnectionManager = new BspConnectionManager();
-    multiBspProvider = new MultiBspProvider(tempConnectionManager, context);
+    multiBspProvider = new MultiBspProvider(tempConnectionManager, context, buildSystemManager);
     
-    // Get the XcodeManager instance from the first MultiBspProvider
-    const sharedXcodeManager = multiBspProvider.getXcodeManager();
+    // Now create the real connection manager with the shared build system manager
+    connectionManager = new BspConnectionManager(buildSystemManager);
     
-    // Now create the real connection manager with the shared XcodeManager
-    connectionManager = new BspConnectionManager(sharedXcodeManager);
-    
-    // Replace the multiBspProvider with the correct connection manager, but reuse the XcodeManager
-    multiBspProvider = new MultiBspProvider(connectionManager, context, sharedXcodeManager);
+    // Replace the multiBspProvider with the correct connection manager, reusing the build system manager
+    multiBspProvider = new MultiBspProvider(connectionManager, context, buildSystemManager);
 
     // Register multi-BSP tree data provider
     const multiBspTreeView = vscode.window.createTreeView('bspTargets', {
@@ -211,11 +211,10 @@ async function initializeBspExtension(context: vscode.ExtensionContext) {
     logInfo('Multi-BSP tree view registered');
 
     // Initialize single BSP client for backward compatibility
-    const xcodeManagerForBspClient = multiBspProvider.getXcodeManager();
-    logInfo(`🔧 Getting XcodeManager for BspClient: ${xcodeManagerForBspClient ? 'available' : 'unavailable'}`);
-    logInfo(`🔧 XcodeManager type: ${typeof xcodeManagerForBspClient}`);
-    logInfo(`🔧 XcodeManager instance: ${xcodeManagerForBspClient?.constructor?.name}`);
-    bspClient = new BspClient(workspaceFolders[0].uri, undefined, undefined, xcodeManagerForBspClient);
+    logInfo(`🔧 Getting BuildSystemManager for BspClient: ${buildSystemManager ? 'available' : 'unavailable'}`);
+    logInfo(`🔧 BuildSystemManager type: ${typeof buildSystemManager}`);
+    logInfo(`🔧 BuildSystemManager instance: ${buildSystemManager?.constructor?.name}`);
+    bspClient = new BspClient(workspaceFolders[0].uri, undefined, undefined, buildSystemManager);
     buildTargetProvider = new BuildTargetProvider(bspClient);
 
     // Register debug providers
@@ -458,41 +457,17 @@ async function initializeBspExtension(context: vscode.ExtensionContext) {
         // This command is disabled and should not be executable
     });
 
-    // Xcode-specific commands
-    const selectXcodeConfigurationCommand = vscode.commands.registerCommand('bsp.selectXcodeConfiguration', async (item) => {
-        const selectedItem = await getOrSelectBuildTarget(item);
-        if (!selectedItem) return;
-
-        logInfo(`selectXcodeConfiguration command triggered with item: ${JSON.stringify(selectedItem)}`);
-        
-        if (!multiBspProvider) {
-            logError('multiBspProvider is not initialized');
+    // Build system commands
+    const handleDynamicSelectorCommand = vscode.commands.registerCommand('bsp.handleDynamicSelector', async (treeItem) => {
+        if (!treeItem || !treeItem.buildTarget || !treeItem.selectorConfig || !multiBspProvider) {
+            logError('Invalid tree item for dynamic selector');
             return;
         }
         
-        if (!selectedItem.buildTarget) {
-            logError('selectedItem.buildTarget is undefined');
-            return;
-        }
+        logInfo(`handleDynamicSelector command triggered for ${treeItem.selectorConfig.keyName}`);
         
-        const xcodeManager = multiBspProvider.getXcodeManager();
-        const configuration = await xcodeManager.selectConfiguration(selectedItem.buildTarget.id.uri);
-        
-        if (configuration) {
-            vscode.window.showInformationMessage(`Selected configuration: ${configuration}`);
-        }
-    });
-
-    const selectXcodeDestinationCommand = vscode.commands.registerCommand('bsp.selectXcodeDestination', async (item) => {
-        const selectedItem = await getOrSelectBuildTarget(item);
-        if (!selectedItem || !multiBspProvider || !selectedItem?.buildTarget) return;
-        
-        const xcodeManager = multiBspProvider.getXcodeManager();
-        const destination = await xcodeManager.selectDestination(selectedItem.buildTarget.id.uri);
-        
-        if (destination) {
-            vscode.window.showInformationMessage(`Selected destination: ${destination}`);
-        }
+        const buildSystemMgr = multiBspProvider.getBuildSystemManager();
+        await buildSystemMgr.showDynamicSelector(treeItem.buildTarget, treeItem.selectorConfig);
     });
 
     // Favorites management commands
@@ -546,8 +521,7 @@ async function initializeBspExtension(context: vscode.ExtensionContext) {
         testDisabledCommand,
         runDisabledCommand,
         debugDisabledCommand,
-        selectXcodeConfigurationCommand,
-        selectXcodeDestinationCommand,
+        handleDynamicSelectorCommand,
         addToFavoritesCommand,
         removeFromFavoritesCommand,
         reconnectFavoriteCommand

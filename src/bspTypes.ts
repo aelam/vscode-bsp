@@ -17,22 +17,12 @@ export interface BuildTarget {
     data?: any;
 }
 
-export interface XcodeData {
-    configurations: string[];
-    destinations: XcodeDestination[];
-    selectedConfiguration?: string;
-    selectedDestination?: XcodeDestination;
+// Generic build system data structure that can be used by any build system
+export interface BuildSystemData {
+    selectors: SelectorConfiguration[]; // Direct support for server data structure
+    selectedValues: { [selectorKey: string]: SelectorOption }; // Store selected values by selector key
 }
 
-export interface XcodeDestination {
-    id: string;
-    name: string;
-    platform: 'iOS' | 'macOS' | 'watchOS' | 'tvOS';
-    version?: string;
-    simulator?: boolean;
-    isAvailable?: boolean;
-    isRunnable?: boolean;
-}
 
 export interface BuildTargetCapabilities {
     canCompile: boolean;
@@ -217,4 +207,22 @@ export interface DiagnosticRelatedInformation {
 export interface Location {
     uri: string;
     range: Range;
+}
+
+// Dynamic Selector Types
+export interface SelectorOption {
+    displayName: string;
+    description?: string;
+    arguments: string[];
+    metadata?: any; // For additional data like device ID
+}
+
+export interface SelectorConfiguration {
+    keyName: string;
+    displayLabel: string;
+    values: SelectorOption[];
+}
+
+export interface DynamicSelectorResponse {
+    selectors: SelectorConfiguration[];
 }
