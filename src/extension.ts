@@ -12,6 +12,122 @@ let connectionManager: BspConnectionManager | undefined;
 let multiBspProvider: MultiBspProvider | undefined;
 let outputChannel: vscode.OutputChannel | undefined;
 
+// Helper function to get or select a build target when item is not provided
+async function getOrSelectBuildTarget(item?: any): Promise<any> {
+    // If item is provided, return it
+    if (item) {
+        return item;
+    }
+
+    // No item provided, show target selection
+    // First try connectionManager (multi-BSP)
+    if (connectionManager) {
+        const connectedClients = connectionManager.getConnectedClients();
+        if (connectedClients.length > 0) {
+            try {
+                // Collect targets from all connected clients
+                const allTargets: Array<{label: string, description: string, target: any, connectionId: string}> = [];
+                
+                for (const { client, connectionId } of connectedClients) {
+                    const targets = await client.getBuildTargets();
+                    targets.forEach(target => {
+                        allTargets.push({
+                            label: target.displayName || target.id.uri,
+                            description: target.id.uri,
+                            target: target,
+                            connectionId: connectionId
+                        });
+                    });
+                }
+                
+                if (allTargets.length === 0) {
+                    vscode.window.showInformationMessage('No build targets available');
+                    return null;
+                }
+                
+                const selected = await vscode.window.showQuickPick(allTargets, {
+                    placeHolder: 'Select a build target'
+                });
+                
+                if (selected) {
+                    // Return in the same format as item would have
+                    return {
+                        buildTarget: selected.target,
+                        id: selected.target.id.uri,
+                        connectionId: selected.connectionId
+                    };
+                }
+            } catch (error) {
+                vscode.window.showErrorMessage(`Failed to get build targets: ${error}`);
+            }
+        } else if (bspClient?.connected) {
+            // Fallback to single BSP client
+            try {
+                const targets = await bspClient.getBuildTargets();
+                if (targets.length === 0) {
+                    vscode.window.showInformationMessage('No build targets available');
+                    return null;
+                }
+                
+                const targetItems = targets.map(target => ({
+                    label: target.displayName || target.id.uri,
+                    description: target.id.uri,
+                    target: target
+                }));
+                
+                const selected = await vscode.window.showQuickPick(targetItems, {
+                    placeHolder: 'Select a build target'
+                });
+                
+                if (selected) {
+                    // Return in the same format as item would have
+                    return {
+                        buildTarget: selected.target,
+                        id: selected.target.id.uri
+                    };
+                }
+            } catch (error) {
+                vscode.window.showErrorMessage(`Failed to get build targets: ${error}`);
+            }
+        } else {
+            vscode.window.showErrorMessage('BSP server not connected');
+        }
+    } else if (bspClient?.connected) {
+        // Fallback to single BSP client
+        try {
+            const targets = await bspClient.getBuildTargets();
+            if (targets.length === 0) {
+                vscode.window.showInformationMessage('No build targets available');
+                return null;
+            }
+            
+            const targetItems = targets.map(target => ({
+                label: target.displayName || target.id.uri,
+                description: target.id.uri,
+                target: target
+            }));
+            
+            const selected = await vscode.window.showQuickPick(targetItems, {
+                placeHolder: 'Select a build target'
+            });
+            
+            if (selected) {
+                // Return in the same format as item would have
+                return {
+                    buildTarget: selected.target,
+                    id: selected.target.id.uri
+                };
+            }
+        } catch (error) {
+            vscode.window.showErrorMessage(`Failed to get build targets: ${error}`);
+        }
+    } else {
+        vscode.window.showErrorMessage('BSP server not connected');
+    }
+    
+    return null;
+}
+
 export async function activate(context: vscode.ExtensionContext) {
     // Create output channel
     outputChannel = vscode.window.createOutputChannel('vscode-bsp');
@@ -73,8 +189,18 @@ async function initializeBspExtension(context: vscode.ExtensionContext) {
     logInfo('BSP context enabled');
 
     // Initialize connection manager and multi-BSP provider
-    connectionManager = new BspConnectionManager();
-    multiBspProvider = new MultiBspProvider(connectionManager, context);
+    // Create a temporary connection manager first
+    const tempConnectionManager = new BspConnectionManager();
+    multiBspProvider = new MultiBspProvider(tempConnectionManager, context);
+    
+    // Get the XcodeManager instance from the first MultiBspProvider
+    const sharedXcodeManager = multiBspProvider.getXcodeManager();
+    
+    // Now create the real connection manager with the shared XcodeManager
+    connectionManager = new BspConnectionManager(sharedXcodeManager);
+    
+    // Replace the multiBspProvider with the correct connection manager, but reuse the XcodeManager
+    multiBspProvider = new MultiBspProvider(connectionManager, context, sharedXcodeManager);
 
     // Register multi-BSP tree data provider
     const multiBspTreeView = vscode.window.createTreeView('bspTargets', {
@@ -85,7 +211,11 @@ async function initializeBspExtension(context: vscode.ExtensionContext) {
     logInfo('Multi-BSP tree view registered');
 
     // Initialize single BSP client for backward compatibility
-    bspClient = new BspClient(workspaceFolders[0].uri);
+    const xcodeManagerForBspClient = multiBspProvider.getXcodeManager();
+    logInfo(`🔧 Getting XcodeManager for BspClient: ${xcodeManagerForBspClient ? 'available' : 'unavailable'}`);
+    logInfo(`🔧 XcodeManager type: ${typeof xcodeManagerForBspClient}`);
+    logInfo(`🔧 XcodeManager instance: ${xcodeManagerForBspClient?.constructor?.name}`);
+    bspClient = new BspClient(workspaceFolders[0].uri, undefined, undefined, xcodeManagerForBspClient);
     buildTargetProvider = new BuildTargetProvider(bspClient);
 
     // Register debug providers
@@ -223,95 +353,87 @@ async function initializeBspExtension(context: vscode.ExtensionContext) {
     });
 
     const compileCommand = vscode.commands.registerCommand('bsp.compile', async (item) => {
-        logInfo(`BSP compile command triggered for target: ${item?.buildTarget?.id?.uri || item?.id || 'unknown'}`);
+        const selectedItem = await getOrSelectBuildTarget(item);
+        if (!selectedItem) return;
+
+        logInfo(`BSP compile command triggered for target: ${selectedItem?.buildTarget?.id?.uri || selectedItem?.id || 'unknown'}`);
         
-        if (item?.connectionId && item?.buildTarget && connectionManager) {
-            const connection = connectionManager.getConnection(item.connectionId);
+        if (selectedItem?.connectionId && selectedItem?.buildTarget && connectionManager) {
+            const connection = connectionManager.getConnection(selectedItem.connectionId);
             if (connection?.connected) {
-                await connection.client.compile(item.buildTarget.id.uri);
+                await connection.client.compile(selectedItem.buildTarget);
             } else {
                 vscode.window.showErrorMessage('BSP server not connected');
             }
-        } else if (bspClient && item) {
+        } else if (bspClient && selectedItem?.buildTarget) {
             // Fallback for backward compatibility
-            const targetId = item.id || item.buildTarget?.id?.uri || item.buildTarget?.id;
-            if (typeof targetId === 'string') {
-                await bspClient.compile(targetId);
-            } else if (targetId?.uri) {
-                await bspClient.compile(targetId.uri);
-            } else {
-                vscode.window.showErrorMessage('Invalid target ID format');
-            }
+            await bspClient.compile(selectedItem.buildTarget);
+        } else {
+            vscode.window.showErrorMessage('No valid build target selected');
         }
     });
 
     const testCommand = vscode.commands.registerCommand('bsp.test', async (item) => {
-        logInfo(`BSP test command triggered for target: ${item?.buildTarget?.id?.uri || item?.id || 'unknown'}`);
+        const selectedItem = await getOrSelectBuildTarget(item);
+        if (!selectedItem) return;
+
+        logInfo(`BSP test command triggered for target: ${selectedItem?.buildTarget?.id?.uri || selectedItem?.id || 'unknown'}`);
         
-        if (item?.connectionId && item?.buildTarget && connectionManager) {
-            const connection = connectionManager.getConnection(item.connectionId);
+        if (selectedItem?.connectionId && selectedItem?.buildTarget && connectionManager) {
+            const connection = connectionManager.getConnection(selectedItem.connectionId);
             if (connection?.connected) {
-                await connection.client.test(item.buildTarget.id.uri);
+                await connection.client.test(selectedItem.buildTarget);
             } else {
                 vscode.window.showErrorMessage('BSP server not connected');
             }
-        } else if (bspClient && item) {
+        } else if (bspClient && selectedItem?.buildTarget) {
             // Fallback for backward compatibility
-            const targetId = item.id || item.buildTarget?.id?.uri || item.buildTarget?.id;
-            if (typeof targetId === 'string') {
-                await bspClient.test(targetId);
-            } else if (targetId?.uri) {
-                await bspClient.test(targetId.uri);
-            } else {
-                vscode.window.showErrorMessage('Invalid target ID format');
-            }
+            await bspClient.test(selectedItem.buildTarget);
+        } else {
+            vscode.window.showErrorMessage('No valid build target selected');
         }
     });
 
     const runCommand = vscode.commands.registerCommand('bsp.run', async (item) => {
-        logInfo(`BSP run command triggered for target: ${item?.buildTarget?.id?.uri || item?.id || 'unknown'}`);
+        const selectedItem = await getOrSelectBuildTarget(item);
+        if (!selectedItem) return;
+
+        logInfo(`BSP run command triggered for target: ${selectedItem?.buildTarget?.id?.uri || selectedItem?.id || 'unknown'}`);
         
-        if (item?.connectionId && item?.buildTarget && connectionManager) {
-            const connection = connectionManager.getConnection(item.connectionId);
+        if (selectedItem?.connectionId && selectedItem?.buildTarget && connectionManager) {
+            const connection = connectionManager.getConnection(selectedItem.connectionId);
             if (connection?.connected) {
-                await connection.client.run(item.buildTarget.id.uri);
+                await connection.client.run(selectedItem.buildTarget);
             } else {
                 vscode.window.showErrorMessage('BSP server not connected');
             }
-        } else if (bspClient && item) {
+        } else if (bspClient && selectedItem?.buildTarget) {
             // Fallback for backward compatibility
-            const targetId = item.id || item.buildTarget?.id?.uri || item.buildTarget?.id;
-            if (typeof targetId === 'string') {
-                await bspClient.run(targetId);
-            } else if (targetId?.uri) {
-                await bspClient.run(targetId.uri);
-            } else {
-                vscode.window.showErrorMessage('Invalid target ID format');
-            }
+            await bspClient.run(selectedItem.buildTarget);
+        } else {
+            vscode.window.showErrorMessage('No valid build target selected');
         }
     });
 
     const debugCommand = vscode.commands.registerCommand('bsp.debug', async (item) => {
-        logInfo(`BSP debug command triggered for target: ${item?.buildTarget?.id?.uri || item?.id || 'unknown'}`);
+        const selectedItem = await getOrSelectBuildTarget(item);
+        if (!selectedItem) return;
+
+        logInfo(`BSP debug command triggered for target: ${selectedItem?.buildTarget?.id?.uri || selectedItem?.id || 'unknown'}`);
         
         try {
-            if (item?.connectionId && item?.buildTarget && connectionManager) {
-                const connection = connectionManager.getConnection(item.connectionId);
+            if (selectedItem?.connectionId && selectedItem?.buildTarget && connectionManager) {
+                const connection = connectionManager.getConnection(selectedItem.connectionId);
                 if (connection?.connected) {
-                    await connection.client.debug(item.buildTarget.id.uri);
+                    await connection.client.debug(selectedItem.buildTarget);
                 } else {
                     vscode.window.showErrorMessage('BSP server not connected');
                 }
-            } else if (bspClient && item) {
+            } else if (bspClient && selectedItem?.buildTarget) {
                 // Fallback for backward compatibility
-                const targetId = item.id || item.buildTarget?.id?.uri || item.buildTarget?.id;
-                if (typeof targetId === 'string') {
-                    await bspClient.debug(targetId);
-                } else if (targetId?.uri) {
-                    await bspClient.debug(targetId.uri);
-                } else {
-                    vscode.window.showErrorMessage('Invalid target ID format');
-                }
+                await bspClient.debug(selectedItem.buildTarget);
+            } else {
+                vscode.window.showErrorMessage('No valid build target selected');
             }
         } catch (error) {
             logError('Debug failed', error);
@@ -338,25 +460,23 @@ async function initializeBspExtension(context: vscode.ExtensionContext) {
 
     // Xcode-specific commands
     const selectXcodeConfigurationCommand = vscode.commands.registerCommand('bsp.selectXcodeConfiguration', async (item) => {
-        logInfo(`selectXcodeConfiguration command triggered with item: ${JSON.stringify(item)}`);
+        const selectedItem = await getOrSelectBuildTarget(item);
+        if (!selectedItem) return;
+
+        logInfo(`selectXcodeConfiguration command triggered with item: ${JSON.stringify(selectedItem)}`);
         
         if (!multiBspProvider) {
             logError('multiBspProvider is not initialized');
             return;
         }
         
-        if (!item) {
-            logError('item is undefined');
-            return;
-        }
-        
-        if (!item.buildTarget) {
-            logError('item.buildTarget is undefined');
+        if (!selectedItem.buildTarget) {
+            logError('selectedItem.buildTarget is undefined');
             return;
         }
         
         const xcodeManager = multiBspProvider.getXcodeManager();
-        const configuration = await xcodeManager.selectConfiguration(item.buildTarget.id.uri);
+        const configuration = await xcodeManager.selectConfiguration(selectedItem.buildTarget.id.uri);
         
         if (configuration) {
             vscode.window.showInformationMessage(`Selected configuration: ${configuration}`);
@@ -364,10 +484,11 @@ async function initializeBspExtension(context: vscode.ExtensionContext) {
     });
 
     const selectXcodeDestinationCommand = vscode.commands.registerCommand('bsp.selectXcodeDestination', async (item) => {
-        if (!multiBspProvider || !item?.buildTarget) return;
+        const selectedItem = await getOrSelectBuildTarget(item);
+        if (!selectedItem || !multiBspProvider || !selectedItem?.buildTarget) return;
         
         const xcodeManager = multiBspProvider.getXcodeManager();
-        const destination = await xcodeManager.selectDestination(item.buildTarget.id.uri);
+        const destination = await xcodeManager.selectDestination(selectedItem.buildTarget.id.uri);
         
         if (destination) {
             vscode.window.showInformationMessage(`Selected destination: ${destination}`);

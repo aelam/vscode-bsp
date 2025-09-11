@@ -7,9 +7,12 @@ export class XcodeManager {
     private _onDidChangeConfiguration = new vscode.EventEmitter<string>();
     readonly onDidChangeConfiguration = this._onDidChangeConfiguration.event;
     private context?: vscode.ExtensionContext;
+    public readonly _instanceId: string;
 
     constructor(context?: vscode.ExtensionContext) {
         this.context = context;
+        this._instanceId = `xcodeManager-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`;
+        logInfo(`🆔 XcodeManager created with instance ID: ${this._instanceId}`);
     }
 
     /**
@@ -23,7 +26,12 @@ export class XcodeManager {
      * 提取Xcode项目数据
      */
     extractXcodeData(target: BuildTarget): XcodeData | null {
+        logInfo(`🔍 [${this._instanceId}] extractXcodeData called for target: ${target.id.uri}`);
+        logInfo(`🗂️ [${this._instanceId}] Current xcodeData Map size: ${this.xcodeData.size}`);
+        logInfo(`🗂️ [${this._instanceId}] Current xcodeData keys: [${Array.from(this.xcodeData.keys()).join(', ')}]`);
+        
         if (!this.isXcodeTarget(target)) {
+            logInfo(`❌ [${this._instanceId}] Target ${target.id.uri} is not an Xcode target`);
             return null;
         }
 
@@ -33,6 +41,7 @@ export class XcodeManager {
             if (target.data && target.data.xcode) {
                 // 使用已存在的xcode数据，但确保格式正确
                 xcodeData = target.data.xcode as XcodeData;
+                logInfo(`✅ [${this._instanceId}] Using existing xcode data from target.data.xcode`);
             } else {
                 // 从BSP数据中提取Xcode信息
                 xcodeData = {
@@ -41,11 +50,14 @@ export class XcodeManager {
                     selectedConfiguration: undefined,
                     selectedDestination: undefined,
                 };
+                logInfo(`✅ [${this._instanceId}] Extracted xcode data from BSP data: ${xcodeData.configurations.length} configs, ${xcodeData.destinations.length} destinations`);
             }
 
             // 更新缓存并加载用户配置（无论数据来源）
             this.xcodeData.set(target.id.uri, xcodeData);
             this.loadConfiguration(target.id.uri);
+            
+            logInfo(`💾 [${this._instanceId}] Stored xcode data for ${target.id.uri}. Map size now: ${this.xcodeData.size}`);
             
             return xcodeData;
         } catch (error) {
@@ -135,14 +147,20 @@ export class XcodeManager {
      * 获取当前选择的configuration
      */
     getSelectedConfiguration(targetId: string): string | undefined {
-        return this.xcodeData.get(targetId)?.selectedConfiguration;
+        const data = this.xcodeData.get(targetId);
+        logInfo(`🎯 [${this._instanceId}] getSelectedConfiguration for ${targetId}: ${data?.selectedConfiguration || 'undefined'}`);
+        logInfo(`🗂️ [${this._instanceId}] Current xcodeData Map size: ${this.xcodeData.size}, keys: [${Array.from(this.xcodeData.keys()).join(', ')}]`);
+        return data?.selectedConfiguration;
     }
 
     /**
      * 获取当前选择的destination
      */
     getSelectedDestination(targetId: string): XcodeDestination | undefined {
-        return this.xcodeData.get(targetId)?.selectedDestination;
+        const data = this.xcodeData.get(targetId);
+        logInfo(`🎯 [${this._instanceId}] getSelectedDestination for ${targetId}: ${data?.selectedDestination?.id || 'undefined'}`);
+        logInfo(`🗂️ [${this._instanceId}] Current xcodeData Map size: ${this.xcodeData.size}, keys: [${Array.from(this.xcodeData.keys()).join(', ')}]`);
+        return data?.selectedDestination;
     }
 
     /**
@@ -161,7 +179,7 @@ export class XcodeManager {
         }
         
         if (xcodeData.selectedDestination) {
-            parts.push(xcodeData.selectedDestination.name);
+            parts.push(`${xcodeData.selectedDestination.name}` + (xcodeData.selectedDestination.version ? ` (${xcodeData.selectedDestination.version})` : ''));
         }
 
         return parts.join(' | ');
@@ -304,6 +322,16 @@ export class XcodeManager {
         }
         
         return new vscode.ThemeIcon('device-desktop');
+    }
+
+    // Debug method to access xcodeData Map size
+    getXcodeDataSize(): number {
+        return this.xcodeData.size;
+    }
+
+    // Debug method to get all target IDs in xcodeData Map
+    getXcodeDataKeys(): string[] {
+        return Array.from(this.xcodeData.keys());
     }
 
 }

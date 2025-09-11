@@ -26,7 +26,7 @@ export class BspConnectionManager {
     private _onDidUpdateTargets = new vscode.EventEmitter<string>(); // connectionId
     readonly onDidUpdateTargets = this._onDidUpdateTargets.event;
 
-    constructor() {}
+    constructor(private xcodeManager?: any) {}
 
     async discoverBspConfigurations(workspaceUri: vscode.Uri): Promise<BspConnectionConfig[]> {
         const configs: BspConnectionConfig[] = [];
@@ -60,7 +60,7 @@ export class BspConnectionManager {
         const client = new BspClient(config.workspaceUri, config.configPath, () => {
             // Notify when targets are updated for this connection
             this._onDidUpdateTargets.fire(connectionId);
-        });
+        }, this.xcodeManager);
         
         const connection: BspConnection = {
             id: connectionId,

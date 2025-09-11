@@ -44,10 +44,17 @@ export class BspClient {
     private requestCounter = 0;
     private onTargetsUpdated?: () => void;
 
-    constructor(workspaceUri: vscode.Uri, private configPath?: string, onTargetsUpdated?: () => void) {
+    constructor(workspaceUri: vscode.Uri, private configPath?: string, onTargetsUpdated?: () => void, private xcodeManager?: any) {
         this.workspaceUri = workspaceUri;
         this.diagnosticsCollection = vscode.languages.createDiagnosticCollection('bsp');
         this.onTargetsUpdated = onTargetsUpdated;
+        
+        // Debug: Check XcodeManager instance
+        if (this.xcodeManager) {
+            log(`🔧 BspClient: XcodeManager instance ID: ${this.xcodeManager._instanceId || 'no-id'}`);
+            log(`🔧 BspClient: XcodeManager xcodeData Map size: ${this.xcodeManager.getXcodeDataSize()}`);
+            log(`🔧 BspClient: XcodeManager xcodeData keys: [${this.xcodeManager.getXcodeDataKeys().join(', ')}]`);
+        }
     }
 
     async connect(): Promise<void> {
@@ -152,61 +159,138 @@ export class BspClient {
         });
     }
 
-    compile(targetId: string): Promise<CompileResult> {
+    compile(target: BuildTarget): Promise<CompileResult> {
+        const targetId = target.id.uri;
+        
         return this.executeWithProgress('compile', targetId, async () => {
             if (!this.connection) {
                 throw new Error('BSP client not connected');
             }
 
+            let compileArgs: string[] = [];
+            
+            // Get user's selected configuration and destination from XcodeManager (if available)
+            if (this.xcodeManager && this.xcodeManager.isXcodeTarget(target)) {
+                log(`🔧 Using XcodeManager instance: ${this.xcodeManager.constructor.name}`);
+                log(`🔧 XcodeManager instance ID: ${this.xcodeManager._instanceId}`);
+                log(`🔧 Target ID: ${targetId}`);
+                log(`🔧 Pre-extraction xcodeData Map size: ${this.xcodeManager.getXcodeDataSize()}`);
+                log(`🔧 Pre-extraction xcodeData keys: [${this.xcodeManager.getXcodeDataKeys().join(', ')}]`);
+                
+                // Force extract xcode data to ensure it's available
+                // log(`🔧 Extracting xcode data for target...`);
+                // const extractedData = this.xcodeManager.extractXcodeData(target);
+                // log(`🔧 Extracted data: ${JSON.stringify(extractedData, null, 2)}`);
+                
+                const selectedConfiguration = this.xcodeManager.getSelectedConfiguration(targetId);
+                const selectedDestination = this.xcodeManager.getSelectedDestination(targetId);
+                
+                log(`🔧 Selected configuration: ${selectedConfiguration || 'none'}`);
+                log(`🔧 Selected destination: ${selectedDestination?.id || 'none'}`);
+                
+                if (selectedConfiguration) {
+                    compileArgs.push('-configuration', selectedConfiguration);
+                    log(`🔧 Added configuration argument: -configuration ${selectedConfiguration}`);
+                }
+                if (selectedDestination) {
+                    compileArgs.push('-destination', `id=${selectedDestination.id}`);
+                    log(`🔧 Added destination argument: -destination id=${selectedDestination.id}`);
+                }
+            } else if (this.xcodeManager) {
+                log(`⚠️ Target ${targetId} is not recognized as Xcode target`);
+                log(`⚠️ Target dataKind: ${target.dataKind}, data.xcode: ${!!target.data?.xcode}`);
+            } else {
+                log(`⚠️ XcodeManager not available`);
+            }
+
             const params: CompileParams = {
                 targets: [{ uri: targetId }],
-                originId: this.generateOriginId()
+                originId: this.generateOriginId(),
+                arguments: compileArgs
             };
 
-            log(`🔨 Starting compilation for ${targetId}`);
+            log(`🔨 Starting compilation for ${target.displayName || targetId}`);
             const result: CompileResult = await this.connection.sendRequest('buildTarget/compile', params);
             this.handleCompileResult(result);
             return result;
         });
     }
 
-    test(targetId: string): Promise<TestResult> {
+    test(target: BuildTarget): Promise<TestResult> {
+        const targetId = target.id.uri;
+        
         return this.executeWithProgress('test', targetId, async () => {
             if (!this.connection) {
                 throw new Error('BSP client not connected');
             }
 
+            let testArgs: string[] = [];
+            
+            // Get user's selected configuration and destination from XcodeManager (if available)
+            if (this.xcodeManager && this.xcodeManager.isXcodeTarget(target)) {
+                const selectedConfiguration = this.xcodeManager.getSelectedConfiguration(targetId);
+                const selectedDestination = this.xcodeManager.getSelectedDestination(targetId);
+                
+                if (selectedConfiguration) {
+                    testArgs.push('-configuration', selectedConfiguration);
+                }
+                if (selectedDestination) {
+                    testArgs.push('-destination', `id=${selectedDestination.id}`);
+                }
+            }
+
             const params: TestParams = {
                 targets: [{ uri: targetId }],
-                originId: this.generateOriginId()
+                originId: this.generateOriginId(),
+                arguments: testArgs
             };
 
-            log(`🧪 Starting tests for ${targetId}`);
+            log(`🧪 Starting tests for ${target.displayName || targetId}`);
             const result: TestResult = await this.connection.sendRequest('buildTarget/test', params);
             this.handleTestResult(result);
             return result;
         });
     }
 
-    run(targetId: string): Promise<RunResult> {
+    run(target: BuildTarget): Promise<RunResult> {
+        const targetId = target.id.uri;
+        
         return this.executeWithProgress('run', targetId, async () => {
             if (!this.connection) {
                 throw new Error('BSP client not connected');
             }
 
+            let runArgs: string[] = [];
+            
+            // Get user's selected configuration and destination from XcodeManager (if available)
+            if (this.xcodeManager && this.xcodeManager.isXcodeTarget(target)) {
+                const selectedConfiguration = this.xcodeManager.getSelectedConfiguration(targetId);
+                const selectedDestination = this.xcodeManager.getSelectedDestination(targetId);
+                
+                if (selectedConfiguration) {
+                    runArgs.push('-configuration', selectedConfiguration);
+                }
+                if (selectedDestination) {
+                    runArgs.push('-destination', `id=${selectedDestination.id}`);
+                }
+            }
+
             const params: RunParams = {
                 target: { uri: targetId },
-                originId: this.generateOriginId()
+                originId: this.generateOriginId(),
+                arguments: runArgs
             };
 
-            log(`🏃 Starting run for ${targetId}`);
+            log(`🏃 Starting run for ${target.displayName || targetId}`);
             const result: RunResult = await this.connection.sendRequest('buildTarget/run', params);
             this.handleRunResult(result);
             return result;
         });
     }
 
-    async debug(targetId: string): Promise<DebugSessionAddressResult> {
+    async debug(target: BuildTarget): Promise<DebugSessionAddressResult> {
+        const targetId = target.id.uri;
+        
         if (!this.connection) {
             throw new Error('BSP client not connected');
         }
@@ -216,6 +300,7 @@ export class BspClient {
         };
 
         try {
+            log(`🐛 Starting debug for ${target.displayName || targetId}`);
             const result: DebugSessionAddressResult = await this.connection.sendRequest('debugSession/start', params);
             this.handleDebugResult(result, targetId);
             return result;

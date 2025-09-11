@@ -12,9 +12,9 @@ export class MultiBspProvider implements vscode.TreeDataProvider<BspTreeItem> {
     private targetToConnectionMap = new Map<string, string>(); // targetId -> connectionId
     private xcodeManager: XcodeManager;
 
-    constructor(private connectionManager: BspConnectionManager, context?: vscode.ExtensionContext) {
+    constructor(private connectionManager: BspConnectionManager, context?: vscode.ExtensionContext, sharedXcodeManager?: XcodeManager) {
         this.context = context;
-        this.xcodeManager = new XcodeManager(context);
+        this.xcodeManager = sharedXcodeManager || new XcodeManager(context);
         
         // Listen to connection changes
         this.connectionManager.onDidChangeConnections(() => {
@@ -68,7 +68,11 @@ export class MultiBspProvider implements vscode.TreeDataProvider<BspTreeItem> {
                     // 检查是否是Xcode项目
                     const isXcode = this.xcodeManager.isXcodeTarget(target);
                     if (isXcode) {
-                        this.xcodeManager.extractXcodeData(target);
+                        logInfo(`🔧 MultiBspProvider: Extracting Xcode data for ${target.id.uri}`);
+                        const extractedData = this.xcodeManager.extractXcodeData(target);
+                        logInfo(`🔧 MultiBspProvider: Extracted data for ${target.id.uri}: ${extractedData ? 'success' : 'failed'}`);
+                    } else {
+                        logInfo(`🔧 MultiBspProvider: Target ${target.id.uri} is not Xcode target`);
                     }
                     
                     const item = new BspTreeItem(
@@ -360,7 +364,9 @@ export class MultiBspProvider implements vscode.TreeDataProvider<BspTreeItem> {
                 // 检查是否是Xcode项目
                 const isXcode = this.xcodeManager.isXcodeTarget(target);
                 if (isXcode) {
-                    this.xcodeManager.extractXcodeData(target);
+                    logInfo(`🔧 MultiBspProvider getChildren: Extracting Xcode data for ${target.id.uri}`);
+                    const extractedData = this.xcodeManager.extractXcodeData(target);
+                    logInfo(`🔧 MultiBspProvider getChildren: Extracted data for ${target.id.uri}: ${extractedData ? 'success' : 'failed'}`);
                 }
                 
                 const item = new BspTreeItem(
