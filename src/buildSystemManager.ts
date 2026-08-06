@@ -147,12 +147,20 @@ export class BuildSystemManager {
         }
         
         const items: QuickPickItemWithOption[] = selectorConfig.values.map((option: any) => {
+            // Distinguish simulators from physical devices so users don't
+            // accidentally pick a real device (which needs signing + devicectl,
+            // not simctl). The server sends `metadata.simulator`.
+            const sim = option?.metadata?.simulator;
+            const kind = sim === true ? '$(device-mobile) Simulator'
+                : sim === false ? '$(device-mobile-slash) Device'
+                : undefined;
             const item: QuickPickItemWithOption = {
                 label: option.displayName,
+                description: kind,
                 detail: option.description,
                 option: option
             };
-            
+
             return item;
         });
 
