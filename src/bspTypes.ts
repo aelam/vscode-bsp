@@ -86,8 +86,18 @@ export interface DebugSessionAddress {
     uri: string;
 }
 
+/// lldb-dap attach/launch parameters the server hands back alongside the URI.
+export interface DebugSessionData {
+    request: 'attach' | 'launch';
+    program?: string;
+    pid?: number;
+    bundleId?: string;
+}
+
 export interface DebugSessionAddressResult {
     uri: string;
+    dataKind?: string;
+    data?: DebugSessionData;
 }
 
 export enum StatusCode {

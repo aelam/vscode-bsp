@@ -530,23 +530,26 @@ export class BspClient {
         try {
             // Parse the debug address (could be DAP over TCP, Unix socket, etc.)
             const debugAddress = result.uri;
-            
+            const data = result.data;
+
             if (debugAddress.startsWith('tcp://')) {
                 // TCP connection for DAP
                 const match = debugAddress.match(/tcp:\/\/([^:]+):(\d+)/);
                 if (match) {
                     const host = match[1];
                     const port = parseInt(match[2]);
-                    
-                    await this.startVSCodeDebugSession(targetId, {
+
+                    // macOS -> launch (program); simulator -> attach (pid).
+                    const config: vscode.DebugConfiguration = {
                         type: 'bsp-debug',
                         name: `Debug ${targetId}`,
-                        request: 'attach',
-                        connect: {
-                            host: host,
-                            port: port
-                        }
-                    });
+                        request: data?.request ?? 'attach',
+                        connect: { host, port }
+                    };
+                    if (data?.pid !== undefined) { config.pid = data.pid; }
+                    if (data?.program !== undefined) { config.program = data.program; }
+
+                    await this.startVSCodeDebugSession(targetId, config);
                 }
             } else if (debugAddress.startsWith('unix://')) {
                 // Unix socket connection

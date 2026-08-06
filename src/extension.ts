@@ -217,14 +217,15 @@ async function initializeBspExtension(context: vscode.ExtensionContext) {
     bspClient = new BspClient(workspaceFolders[0].uri, undefined, undefined, buildSystemManager);
     buildTargetProvider = new BuildTargetProvider(bspClient);
 
-    // Register debug providers
-    // const debugConfigProvider = new BspDebugConfigurationProvider();
-    // const debugAdapterFactory = new BspDebugAdapterDescriptorFactory();
-    
-    // context.subscriptions.push(
-    //     vscode.debug.registerDebugConfigurationProvider('bsp-debug', debugConfigProvider),
-    //     vscode.debug.registerDebugAdapterDescriptorFactory('bsp-debug', debugAdapterFactory)
-    // );
+    // Register debug providers: the config provider fills defaults, the adapter
+    // factory connects to the lldb-dap TCP endpoint the server returned.
+    const debugConfigProvider = new BspDebugConfigurationProvider();
+    const debugAdapterFactory = new BspDebugAdapterDescriptorFactory();
+
+    context.subscriptions.push(
+        vscode.debug.registerDebugConfigurationProvider('bsp-debug', debugConfigProvider),
+        vscode.debug.registerDebugAdapterDescriptorFactory('bsp-debug', debugAdapterFactory)
+    );
 
     // Register commands
     const refreshCommand = vscode.commands.registerCommand('bsp.refresh', () => {

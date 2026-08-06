@@ -7,28 +7,17 @@ export class BspDebugConfigurationProvider implements vscode.DebugConfigurationP
      * e.g. add all missing attributes to the debug configuration.
      */
     resolveDebugConfiguration(
-        folder: vscode.WorkspaceFolder | undefined, 
-        config: vscode.DebugConfiguration, 
-        token?: vscode.CancellationToken
+        _folder: vscode.WorkspaceFolder | undefined,
+        config: vscode.DebugConfiguration,
+        _token?: vscode.CancellationToken
     ): vscode.ProviderResult<vscode.DebugConfiguration> {
-        
-        // If launch.json is missing or empty
-        if (!config.type && !config.request && !config.name) {
-            const editor = vscode.window.activeTextEditor;
-            if (editor && editor.document.languageId === 'scala' || editor?.document.languageId === 'java') {
-                config.type = 'bsp-debug';
-                config.name = 'BSP Debug';
-                config.request = 'launch';
-                config.stopOnEntry = true;
-            }
-        }
-
-        if (!config.program) {
-            return vscode.window.showInformationMessage("Cannot find a program to debug").then(_ => {
-                return undefined;	// abort launch
-            });
-        }
-
+        // Configurations are normally supplied programmatically by the BSP
+        // client (from the server's debugSession/start response), carrying a
+        // `connect` endpoint plus either `pid` (attach) or `program` (launch).
+        // Only fill in essentials; do NOT require `program` — attach uses `pid`.
+        if (!config.type) { config.type = 'bsp-debug'; }
+        if (!config.request) { config.request = 'attach'; }
+        if (!config.name) { config.name = 'BSP Debug'; }
         return config;
     }
 
