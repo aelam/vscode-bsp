@@ -5,7 +5,7 @@ import { BspConnectionManager } from './bspConnectionManager';
 import { MultiBspProvider } from './multiBspProvider';
 import { BspDebugConfigurationProvider, BspDebugAdapterDescriptorFactory } from './debugProvider';
 import { BuildSystemManager } from './buildSystemManager';
-import { initializeLogger, log, logError, logInfo } from './logger';
+import { initializeBuildLogger, initializeLogger, log, logError, logInfo } from './logger';
 
 let bspClient: BspClient | undefined;
 let buildTargetProvider: BuildTargetProvider | undefined;
@@ -130,12 +130,18 @@ async function getOrSelectBuildTarget(item?: any): Promise<any> {
 }
 
 export async function activate(context: vscode.ExtensionContext) {
-    // Create output channel
+    // Create output channels
     outputChannel = vscode.window.createOutputChannel('vscode-bsp');
     context.subscriptions.push(outputChannel);
-    
-    // Initialize logger
+
+    // Dedicated channel for build/compile output streamed from the server,
+    // switchable in the Output dropdown next to 'vscode-bsp'.
+    const buildOutputChannel = vscode.window.createOutputChannel('vscode-bsp-log');
+    context.subscriptions.push(buildOutputChannel);
+
+    // Initialize loggers
     initializeLogger(outputChannel);
+    initializeBuildLogger(buildOutputChannel);
     
     // 强制断点用于调试测试
     log('🔥 BSP ACTIVATION START');

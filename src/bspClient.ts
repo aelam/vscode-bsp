@@ -6,7 +6,7 @@ import {
     StreamMessageWriter 
 } from 'vscode-jsonrpc/node';
 import { spawn, ChildProcess } from 'child_process';
-import { log, logError, logInfo } from './logger';
+import { buildLog, log, logError, logInfo, showBuildOutput } from './logger';
 import {
     BuildTarget,
     WorkspaceBuildTargetsResult,
@@ -411,25 +411,26 @@ export class BspClient {
             this.handleDiagnostics(params);
         });
 
-        // Handle task start/finish notifications
+        // Build task/log notifications go to the dedicated 'vscode-bsp-log'
+        // channel so build/compile output is easy to read and switch to.
         this.connection.onNotification('build/taskStart', (params: any) => {
-            log(`Task started: ${JSON.stringify(params)}`);
+            showBuildOutput();
+            buildLog(`▶︎ ${params.message || 'Task started'}`);
             vscode.window.setStatusBarMessage(`BSP: ${params.message || 'Task started'}`, 2000);
         });
 
         this.connection.onNotification('build/taskFinish', (params: any) => {
-            log(`Task finished: ${JSON.stringify(params)}`);
+            buildLog(`✓ ${params.message || 'Task finished'}`);
             vscode.window.setStatusBarMessage(`BSP: ${params.message || 'Task finished'}`, 2000);
         });
 
-        // Handle task progress
         this.connection.onNotification('build/taskProgress', (params: any) => {
-            log(`Task progress: ${JSON.stringify(params)}`);
+            if (params.message) { buildLog(`… ${params.message}`); }
         });
 
-        // Handle log messages
+        // Raw build output (xcodebuild lines) streamed from the server.
         this.connection.onNotification('build/logMessage', (params: any) => {
-            log(`BSP log: ${params.message}`);
+            buildLog(params.message ?? String(params));
         });
 
         // Handle show message
