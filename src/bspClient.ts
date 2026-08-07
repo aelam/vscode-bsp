@@ -271,8 +271,23 @@ export class BspClient {
             throw new Error('BSP client not connected');
         }
 
+        // Send the same build arguments as run (configuration + destination) so
+        // the debug build targets the selected simulator/device instead of
+        // defaulting to Mac Catalyst (which then fails code signing).
+        let debugArgs: string[] = [];
+        if (this.buildSystemManager && this.buildSystemManager.canHandle(target)) {
+            try {
+                debugArgs = await this.buildSystemManager.getRunArguments(target);
+                log(`🔧 Generated debug arguments: [${debugArgs.join(', ')}]`);
+            } catch (error) {
+                logError('Failed to get debug arguments from BuildSystemManager', error);
+            }
+        }
+
         const params: DebugSessionParams = {
-            targets: [{ uri: targetId }]
+            targets: [{ uri: targetId }],
+            originId: this.generateOriginId(),
+            arguments: debugArgs
         };
 
         try {
