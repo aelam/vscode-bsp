@@ -15,6 +15,13 @@
   ],
   "main": "./out/extension.js",
   "contributes": {
+    "breakpoints": [
+      { "language": "swift" },
+      { "language": "objective-c" },
+      { "language": "objective-cpp" },
+      { "language": "c" },
+      { "language": "cpp" }
+    ],
     "debuggers": [
       {
         "type": "bsp-debug",
