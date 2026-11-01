@@ -1,9 +1,30 @@
 import * as vscode from 'vscode';
 
 let outputChannel: vscode.OutputChannel | undefined;
+let buildOutputChannel: vscode.OutputChannel | undefined;
 
 export function initializeLogger(channel: vscode.OutputChannel) {
     outputChannel = channel;
+}
+
+/// A dedicated channel ("vscode-bsp-log") for build/compile output streamed
+/// from the server, kept separate from the general extension log.
+export function initializeBuildLogger(channel: vscode.OutputChannel) {
+    buildOutputChannel = channel;
+}
+
+/// Append a raw build line to the dedicated build channel (no timestamp so the
+/// output reads like real xcodebuild output).
+export function buildLog(message: string) {
+    buildOutputChannel?.appendLine(message);
+}
+
+export function showBuildOutput(preserveFocus: boolean = true) {
+    buildOutputChannel?.show(preserveFocus);
+}
+
+export function clearBuildOutput() {
+    buildOutputChannel?.clear();
 }
 
 export function log(message: string, showInConsole: boolean = true) {

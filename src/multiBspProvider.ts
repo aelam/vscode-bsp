@@ -319,6 +319,11 @@ export class MultiBspProvider implements vscode.TreeDataProvider<BspTreeItem> {
             return await this.getTargetDetailItems(element);
         }
 
+        if (element.type === 'dependencies' && element.buildTarget && element.connectionId) {
+            // Expand a "Dependencies (N)" node into its individual targets
+            return this.getDependencyItems(element.buildTarget, element.connectionId);
+        }
+
         return [];
     }
 
@@ -447,13 +452,15 @@ export class MultiBspProvider implements vscode.TreeDataProvider<BspTreeItem> {
             }
         }
 
-        // Add dependencies
+        // Add dependencies (expandable: lists the individual dependency targets)
         if (target.dependencies.length > 0) {
             const dependenciesItem = new BspTreeItem(
                 `Dependencies (${target.dependencies.length})`,
-                vscode.TreeItemCollapsibleState.None,
+                vscode.TreeItemCollapsibleState.Collapsed,
                 'dependencies'
             );
+            dependenciesItem.buildTarget = target;
+            dependenciesItem.connectionId = element.connectionId;
             children.push(dependenciesItem);
         }
 
@@ -468,6 +475,42 @@ export class MultiBspProvider implements vscode.TreeDataProvider<BspTreeItem> {
         }
 
         return children;
+    }
+
+    /// Children of a "Dependencies (N)" node: one item per dependency target.
+    /// Resolves each dependency's URI to the real target (for its displayName)
+    /// when it's known on the connection, otherwise falls back to the URI's
+    /// last path component. Clicking a resolved dependency reuses the
+    /// buildTarget item type so it can be drilled into like any other target.
+    private getDependencyItems(target: BuildTarget, connectionId: string): BspTreeItem[] {
+        const connection = this.connectionManager.getConnection(connectionId);
+        const knownTargets = connection?.client.targets ?? [];
+
+        return target.dependencies.map(dependency => {
+            const resolved = knownTargets.find(t => t.id.uri === dependency.uri);
+            const label = resolved?.displayName || this.shortNameFromTargetUri(dependency.uri);
+
+            const item = new BspTreeItem(
+                label,
+                resolved ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None,
+                resolved ? 'buildTarget' : 'dependency'
+            );
+            item.connectionId = connectionId;
+            item.buildTarget = resolved;
+            item.description = dependency.uri;
+            item.tooltip = dependency.uri;
+            item.iconPath = new vscode.ThemeIcon('references');
+            return item;
+        });
+    }
+
+    /// Best-effort human-readable name from a build target URI
+    /// (e.g. "xcode:///path/App.xcodeproj/MyLib" -> "MyLib").
+    private shortNameFromTargetUri(uri: string): string {
+        const trimmed = uri.replace(/\/+$/, '');
+        const lastSlash = trimmed.lastIndexOf('/');
+        const name = lastSlash >= 0 ? trimmed.substring(lastSlash + 1) : trimmed;
+        return name.length > 0 ? name : uri;
     }
 
     private getConnectionDescription(connection: BspConnection): string {
@@ -649,7 +692,7 @@ export class BspTreeItem extends vscode.TreeItem {
     constructor(
         label: string,
         collapsibleState: vscode.TreeItemCollapsibleState,
-        public readonly type: 'connection' | 'buildTarget' | 'capability' | 'dependencies' | 'languages' | 'status' | 'error' | 'buildConfig' | 'customSelector' | 'favoritesGroup'
+        public readonly type: 'connection' | 'buildTarget' | 'capability' | 'dependencies' | 'dependency' | 'languages' | 'status' | 'error' | 'buildConfig' | 'customSelector' | 'favoritesGroup'
     ) {
         super(label, collapsibleState);
         

@@ -15,6 +15,26 @@
   ],
   "main": "./out/extension.js",
   "contributes": {
+    "breakpoints": [
+      { "language": "swift" },
+      { "language": "objective-c" },
+      { "language": "objective-cpp" },
+      { "language": "c" },
+      { "language": "cpp" }
+    ],
+    "debuggers": [
+      {
+        "type": "bsp-debug",
+        "label": "BSP Debug",
+        "languages": [
+          "swift",
+          "objective-c",
+          "objective-cpp",
+          "c",
+          "cpp"
+        ]
+      }
+    ],
     "commands": [
       {
         "command": "bsp.activate",
@@ -55,6 +75,12 @@
         "title": "Debug Target",
         "category": "BSP",
         "icon": "$(bug)"
+      },
+      {
+        "command": "bsp.revealBuildOutput",
+        "title": "Reveal Build Output",
+        "category": "BSP",
+        "icon": "$(folder-opened)"
       },
       {
         "command": "bsp.showOutput",
@@ -177,6 +203,11 @@
         }
       ],
       "view/item/context": [
+        {
+          "command": "bsp.revealBuildOutput",
+          "when": "view == bspTargets && viewItem =~ /buildTarget/ && !(viewItem =~ /disconnected|loading/)",
+          "group": "build@5"
+        },
         {
           "command": "bsp.compile",
           "when": "view == bspTargets && viewItem =~ /buildTarget.*canCompile/",
@@ -424,6 +455,7 @@
     "pretest": "npm run compile && npm run lint",
     "lint": "eslint src --ext ts",
     "test": "node ./out/test/runTest.js",
+    "test:protocol": "npm run compile && node --test test/protocol.test.cjs",
     "package": "vsce package",
     "install-local": "code --install-extension vscode-bsp-*.vsix"
   },

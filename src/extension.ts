@@ -5,7 +5,8 @@ import { BspConnectionManager } from './bspConnectionManager';
 import { MultiBspProvider } from './multiBspProvider';
 import { BspDebugConfigurationProvider, BspDebugAdapterDescriptorFactory } from './debugProvider';
 import { BuildSystemManager } from './buildSystemManager';
-import { initializeLogger, log, logError, logInfo } from './logger';
+import { revealBuildOutput } from './outputPaths';
+import { initializeBuildLogger, initializeLogger, log, logError, logInfo } from './logger';
 
 let bspClient: BspClient | undefined;
 let buildTargetProvider: BuildTargetProvider | undefined;
@@ -130,12 +131,18 @@ async function getOrSelectBuildTarget(item?: any): Promise<any> {
 }
 
 export async function activate(context: vscode.ExtensionContext) {
-    // Create output channel
+    // Create output channels
     outputChannel = vscode.window.createOutputChannel('vscode-bsp');
     context.subscriptions.push(outputChannel);
-    
-    // Initialize logger
+
+    // Dedicated channel for build/compile output streamed from the server,
+    // switchable in the Output dropdown next to 'vscode-bsp'.
+    const buildOutputChannel = vscode.window.createOutputChannel('vscode-bsp-log');
+    context.subscriptions.push(buildOutputChannel);
+
+    // Initialize loggers
     initializeLogger(outputChannel);
+    initializeBuildLogger(buildOutputChannel);
     
     // 强制断点用于调试测试
     log('🔥 BSP ACTIVATION START');
@@ -217,14 +224,26 @@ async function initializeBspExtension(context: vscode.ExtensionContext) {
     bspClient = new BspClient(workspaceFolders[0].uri, undefined, undefined, buildSystemManager);
     buildTargetProvider = new BuildTargetProvider(bspClient);
 
-    // Register debug providers
-    // const debugConfigProvider = new BspDebugConfigurationProvider();
-    // const debugAdapterFactory = new BspDebugAdapterDescriptorFactory();
-    
-    // context.subscriptions.push(
-    //     vscode.debug.registerDebugConfigurationProvider('bsp-debug', debugConfigProvider),
-    //     vscode.debug.registerDebugAdapterDescriptorFactory('bsp-debug', debugAdapterFactory)
-    // );
+    // Register debug providers: the config provider fills defaults, the adapter
+    // factory connects to the lldb-dap TCP endpoint the server returned.
+    const debugConfigProvider = new BspDebugConfigurationProvider();
+    const debugAdapterFactory = new BspDebugAdapterDescriptorFactory();
+
+    context.subscriptions.push(
+        vscode.debug.registerDebugConfigurationProvider('bsp-debug', debugConfigProvider),
+        vscode.debug.registerDebugAdapterDescriptorFactory('bsp-debug', debugAdapterFactory)
+    );
+
+    // Debug session lifecycle logging — reveals whether a session actually
+    // starts, and whether/why it terminates (adapter connect failure, etc.).
+    context.subscriptions.push(
+        vscode.debug.onDidStartDebugSession(s =>
+            log(`🐛 onDidStartDebugSession: type=${s.type} name=${s.name}`)),
+        vscode.debug.onDidTerminateDebugSession(s =>
+            log(`🐛 onDidTerminateDebugSession: type=${s.type} name=${s.name}`)),
+        vscode.debug.onDidReceiveDebugSessionCustomEvent(e =>
+            log(`🐛 debug custom event: ${e.event} ${JSON.stringify(e.body)}`))
+    );
 
     // Register commands
     const refreshCommand = vscode.commands.registerCommand('bsp.refresh', () => {
@@ -348,6 +367,23 @@ async function initializeBspExtension(context: vscode.ExtensionContext) {
         } catch (error) {
             logError('Failed to disconnect from server', error);
             vscode.window.showErrorMessage(`Failed to disconnect: ${error}`);
+        }
+    });
+
+    const revealOutputCommand = vscode.commands.registerCommand('bsp.revealBuildOutput', async (item) => {
+        const selected = await getOrSelectBuildTarget(item);
+        if (!selected?.buildTarget) { return; }
+        const client = selected.connectionId
+            ? connectionManager?.getConnection(selected.connectionId)?.client : bspClient;
+        if (!client?.connected) {
+            vscode.window.showErrorMessage('BSP server not connected');
+            return;
+        }
+        try {
+            await revealBuildOutput(client, selected.buildTarget);
+        } catch (error) {
+            logError('Failed to reveal build output', error);
+            vscode.window.showErrorMessage(`Failed to reveal build output: ${error}`);
         }
     });
 
@@ -514,6 +550,7 @@ async function initializeBspExtension(context: vscode.ExtensionContext) {
         connectServerCommand,
         disconnectServerCommand,
         compileCommand,
+        revealOutputCommand,
         testCommand,
         runCommand,
         debugCommand,

@@ -78,6 +78,10 @@ export interface RunResult {
 
 export interface DebugSessionParams {
     targets: BuildTargetIdentifier[];
+    originId?: string;
+    /// Build arguments (e.g. -configuration / -destination) — same selection
+    /// used for run, so the debug build targets the chosen simulator/device.
+    arguments?: string[];
     dataKind?: string;
     data?: any;
 }
@@ -86,8 +90,18 @@ export interface DebugSessionAddress {
     uri: string;
 }
 
+/// lldb-dap attach/launch parameters the server hands back alongside the URI.
+export interface DebugSessionData {
+    request: 'attach' | 'launch';
+    program?: string;
+    pid?: number;
+    bundleId?: string;
+}
+
 export interface DebugSessionAddressResult {
     uri: string;
+    dataKind?: string;
+    data?: DebugSessionData;
 }
 
 export enum StatusCode {
@@ -225,4 +239,25 @@ export interface SelectorConfiguration {
 
 export interface DynamicSelectorResponse {
     selectors: SelectorConfiguration[];
+}
+export interface TaskIdentifier { id: string; parents?: string[] }
+export interface TaskStartParams {
+    taskId: TaskIdentifier | string;
+    originId?: string;
+    eventTime?: number;
+    message?: string;
+}
+export interface TaskProgressParams extends TaskStartParams {
+    progress?: number;
+    total?: number;
+    unit?: string;
+}
+export interface TaskFinishParams extends TaskStartParams { status: StatusCode }
+
+export interface OutputPathItem {
+    uri: string;
+    kind: 1 | 2;
+}
+export interface OutputPathsResult {
+    items: { target: BuildTargetIdentifier; outputPaths: OutputPathItem[] }[];
 }

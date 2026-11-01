@@ -60,6 +60,23 @@ For sbt projects:
 
 ## Usage
 
+### Progress and build output
+
+BSP task notifications update the progress notification. When a server supplies both
+`progress` and `total`, the client shows a percentage. Otherwise, it shows the stage
+and any reported count. Cancel sends `$/cancelRequest` to the server.
+
+`build/logMessage` appears in **Output → vscode-bsp-log**. Compiler diagnostics appear
+in **Problems** and are tracked separately for each target. The server supplies the
+messages; the client does not parse tool-specific build output.
+
+Right-click a build target and choose **Reveal Build Output**, or run **BSP: Reveal
+Build Output** from the Command Palette. The client requests `buildTarget/outputPaths`
+and reveals the selected location in the system file manager. It does not infer
+paths from the build tool. The server must advertise `outputPathsProvider`.
+
+Run `npm run test:protocol` to check progress, cancellation, diagnostics, and output paths.
+
 ### Activation
 
 The extension automatically activates when it detects a `.bsp` directory in your workspace.
