@@ -77,6 +77,12 @@
         "icon": "$(bug)"
       },
       {
+        "command": "bsp.revealBuildOutput",
+        "title": "Reveal Build Output",
+        "category": "BSP",
+        "icon": "$(folder-opened)"
+      },
+      {
         "command": "bsp.showOutput",
         "title": "Show BSP Output",
         "category": "BSP"
@@ -197,6 +203,11 @@
         }
       ],
       "view/item/context": [
+        {
+          "command": "bsp.revealBuildOutput",
+          "when": "view == bspTargets && viewItem =~ /buildTarget/ && !(viewItem =~ /disconnected|loading/)",
+          "group": "build@5"
+        },
         {
           "command": "bsp.compile",
           "when": "view == bspTargets && viewItem =~ /buildTarget.*canCompile/",
@@ -444,6 +455,7 @@
     "pretest": "npm run compile && npm run lint",
     "lint": "eslint src --ext ts",
     "test": "node ./out/test/runTest.js",
+    "test:protocol": "npm run compile && node --test test/protocol.test.cjs",
     "package": "vsce package",
     "install-local": "code --install-extension vscode-bsp-*.vsix"
   },

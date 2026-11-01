@@ -3,8 +3,12 @@ import {
     createMessageConnection, 
     MessageConnection, 
     StreamMessageReader, 
-    StreamMessageWriter 
+    StreamMessageWriter,
+    CancellationToken,
+    CancellationTokenSource
 } from 'vscode-jsonrpc/node';
+import { BspProgress, taskId } from './bspProgress';
+import { BspDiagnostics } from './bspDiagnostics';
 import { spawn, ChildProcess } from 'child_process';
 import { buildLog, log, logError, logInfo, showBuildOutput } from './logger';
 import {
@@ -21,7 +25,13 @@ import {
     PublishDiagnosticsParams,
     StatusCode,
     DebugSessionParams,
-    DebugSessionAddressResult
+    DebugSessionAddressResult,
+    TaskStartParams,
+    TaskProgressParams,
+    TaskFinishParams,
+    BuildServerCapabilities,
+    OutputPathItem,
+    OutputPathsResult
 } from './bspTypes';
 
 export interface BspConnectionDetails {
@@ -36,12 +46,15 @@ export class BspClient {
     private connection: MessageConnection | undefined;
     private serverProcess: ChildProcess | undefined;
     private buildTargets: BuildTarget[] = [];
+    private serverCapabilities: BuildServerCapabilities = {};
     private isConnected = false;
     private workspaceUri: vscode.Uri;
     private connectionDetails: BspConnectionDetails | undefined;
     private diagnosticsCollection: vscode.DiagnosticCollection;
     private activeRequests = new Map<string, Promise<any>>();
-    private requestCounter = 0;
+    private progress = new BspProgress();
+    private diagnostics = new BspDiagnostics();
+    private cancellations = new Map<string, CancellationTokenSource>();
     private onTargetsUpdated?: () => void;
 
     constructor(workspaceUri: vscode.Uri, private configPath?: string, onTargetsUpdated?: () => void, private buildSystemManager?: any) {
@@ -112,6 +125,7 @@ export class BspClient {
             }
 
             this.isConnected = false;
+            this.clearTaskState();
             this.diagnosticsCollection.clear();
             log('BSP client disconnected');
         } catch (error) {
@@ -142,14 +156,26 @@ export class BspClient {
         }
     }
 
+    async getOutputPaths(target: BuildTarget): Promise<OutputPathItem[]> {
+        if (!this.connection) { throw new Error('BSP client not connected'); }
+        if (!this.serverCapabilities.outputPathsProvider) {
+            throw new Error('This BSP server does not provide build output paths');
+        }
+        const result: OutputPathsResult = await this.connection.sendRequest('buildTarget/outputPaths', {
+            targets: [target.id]
+        });
+        const paths = result.items.filter(item => item.target.uri === target.id.uri).flatMap(item => item.outputPaths);
+        return [...new Map(paths.map(path => [path.uri, path])).values()];
+    }
+
     reload(): Promise<void> {
-        return this.executeWithProgress('reload', 'workspace', async () => {
+        return this.executeWithProgress('reload', 'workspace', async (originId, cancellation) => {
             if (!this.connection) {
                 throw new Error('BSP client not connected');
             }
 
             log('🔄 Starting workspace reload...');
-            await this.connection.sendRequest('workspace/reload');
+            await this.connection.sendRequest('workspace/reload', cancellation);
             
             // Refresh build targets after reload
             await this.getBuildTargets();
@@ -161,7 +187,7 @@ export class BspClient {
     compile(target: BuildTarget): Promise<CompileResult> {
         const targetId = target.id.uri;
         
-        return this.executeWithProgress('compile', targetId, async () => {
+        return this.executeWithProgress('compile', targetId, async (originId, cancellation) => {
             if (!this.connection) {
                 throw new Error('BSP client not connected');
             }
@@ -187,12 +213,12 @@ export class BspClient {
 
             const params: CompileParams = {
                 targets: [{ uri: targetId }],
-                originId: this.generateOriginId(),
+                originId,
                 arguments: compileArgs
             };
 
             log(`🔨 Starting compilation for ${target.displayName || targetId}`);
-            const result: CompileResult = await this.connection.sendRequest('buildTarget/compile', params);
+            const result: CompileResult = await this.connection.sendRequest('buildTarget/compile', params, cancellation);
             this.handleCompileResult(result);
             return result;
         });
@@ -201,7 +227,7 @@ export class BspClient {
     test(target: BuildTarget): Promise<TestResult> {
         const targetId = target.id.uri;
         
-        return this.executeWithProgress('test', targetId, async () => {
+        return this.executeWithProgress('test', targetId, async (originId, cancellation) => {
             if (!this.connection) {
                 throw new Error('BSP client not connected');
             }
@@ -220,12 +246,12 @@ export class BspClient {
 
             const params: TestParams = {
                 targets: [{ uri: targetId }],
-                originId: this.generateOriginId(),
+                originId,
                 arguments: testArgs
             };
 
             log(`🧪 Starting tests for ${target.displayName || targetId}`);
-            const result: TestResult = await this.connection.sendRequest('buildTarget/test', params);
+            const result: TestResult = await this.connection.sendRequest('buildTarget/test', params, cancellation);
             this.handleTestResult(result);
             return result;
         });
@@ -234,7 +260,7 @@ export class BspClient {
     run(target: BuildTarget): Promise<RunResult> {
         const targetId = target.id.uri;
         
-        return this.executeWithProgress('run', targetId, async () => {
+        return this.executeWithProgress('run', targetId, async (originId, cancellation) => {
             if (!this.connection) {
                 throw new Error('BSP client not connected');
             }
@@ -253,12 +279,12 @@ export class BspClient {
 
             const params: RunParams = {
                 target: { uri: targetId },
-                originId: this.generateOriginId(),
+                originId,
                 arguments: runArgs
             };
 
             log(`🏃 Starting run for ${target.displayName || targetId}`);
-            const result: RunResult = await this.connection.sendRequest('buildTarget/run', params);
+            const result: RunResult = await this.connection.sendRequest('buildTarget/run', params, cancellation);
             this.handleRunResult(result);
             return result;
         });
@@ -293,7 +319,8 @@ export class BspClient {
         try {
             log(`🐛 Starting debug for ${target.displayName || targetId}`);
             const result: DebugSessionAddressResult = await this.connection.sendRequest('debugSession/start', params);
-            this.handleDebugResult(result, targetId);
+            log(`🐛 debugSession/start result: ${JSON.stringify(result)}`);
+            await this.handleDebugResult(result, targetId);
             return result;
         } catch (error) {
             logError('Failed to start debug session', error);
@@ -367,6 +394,8 @@ export class BspClient {
 
         this.serverProcess.on('exit', (code, signal) => {
             log(`BSP server exited with code ${code}, signal ${signal}`);
+            this.clearTaskState();
+            this.connection?.dispose();
             this.isConnected = false;
             this.connection = undefined;
             this.serverProcess = undefined;
@@ -381,6 +410,7 @@ export class BspClient {
         const reader = new StreamMessageReader(this.serverProcess.stdout);
         const writer = new StreamMessageWriter(this.serverProcess.stdin);
         this.connection = createMessageConnection(reader, writer);
+        this.connection.onClose(() => this.clearTaskState());
 
         // Set up notification handlers
         this.setupNotificationHandlers();
@@ -406,6 +436,7 @@ export class BspClient {
 
         try {
             const result: InitializeBuildResult = await this.connection.sendRequest('build/initialize', initParams);
+            this.serverCapabilities = result.capabilities;
             log(`BSP server initialized: ${JSON.stringify(result)}`);
 
             // Send initialized notification
@@ -426,26 +457,52 @@ export class BspClient {
             this.handleDiagnostics(params);
         });
 
-        // Build task/log notifications go to the dedicated 'vscode-bsp-log'
-        // channel so build/compile output is easy to read and switch to.
-        this.connection.onNotification('build/taskStart', (params: any) => {
+        this.connection.onNotification('build/taskStart', (params: TaskStartParams) => {
             showBuildOutput();
-            buildLog(`▶︎ ${params.message || 'Task started'}`);
-            vscode.window.setStatusBarMessage(`BSP: ${params.message || 'Task started'}`, 2000);
+            buildLog(`▶ ${params.message || 'Task started'}`);
+            this.progress.start(params, () => {
+                let report = (_update: { message?: string; increment?: number }) => {};
+                let close = () => {};
+                const pending: { message?: string; increment?: number }[] = [];
+                let ready = false;
+                let finished = false;
+                void vscode.window.withProgress({
+                    location: vscode.ProgressLocation.Notification,
+                    title: 'BSP',
+                    cancellable: false
+                }, progress => new Promise<void>(resolve => {
+                    report = update => progress.report(update);
+                    close = resolve;
+                    ready = true;
+                    for (const update of pending) { report(update); }
+                    if (finished) { close(); }
+                }));
+                return {
+                    report: update => ready ? report(update) : pending.push(update),
+                    close: () => { finished = true; if (ready) { close(); } }
+                };
+            });
         });
 
-        this.connection.onNotification('build/taskFinish', (params: any) => {
-            buildLog(`✓ ${params.message || 'Task finished'}`);
+        this.connection.onNotification('build/taskFinish', (params: TaskFinishParams) => {
+            this.progress.finish(params);
+            const status = params.status === StatusCode.Ok ? '✓'
+                : params.status === StatusCode.Cancelled ? 'Cancelled:' : 'Failed:';
+            buildLog(`${status} ${params.message || 'Task finished'} [${taskId(params.taskId)}]`);
             vscode.window.setStatusBarMessage(`BSP: ${params.message || 'Task finished'}`, 2000);
         });
 
-        this.connection.onNotification('build/taskProgress', (params: any) => {
-            if (params.message) { buildLog(`… ${params.message}`); }
+        this.connection.onNotification('build/taskProgress', (params: TaskProgressParams) => {
+            this.progress.progress(params);
         });
 
-        // Raw build output (xcodebuild lines) streamed from the server.
-        this.connection.onNotification('build/logMessage', (params: any) => {
-            buildLog(params.message ?? String(params));
+        this.connection.onNotification('build/logMessage', (params: { type: number; message: string; originId?: string }) => {
+            const prefix = params.type === 1 ? 'Error: ' : params.type === 2 ? 'Warning: ' : '';
+            buildLog(prefix + params.message);
+            if (params.type === 1) {
+                showBuildOutput();
+                logError(params.message);
+            }
         });
 
         // Handle show message
@@ -469,7 +526,7 @@ export class BspClient {
 
     private handleDiagnostics(params: PublishDiagnosticsParams): void {
         const uri = vscode.Uri.parse(params.textDocument.uri);
-        const diagnostics = params.diagnostics.map(diag => {
+        const diagnostics = this.diagnostics.update(params).map(diag => {
             const range = new vscode.Range(
                 new vscode.Position(diag.range.start.line, diag.range.start.character),
                 new vscode.Position(diag.range.end.line, diag.range.end.character)
@@ -481,19 +538,20 @@ export class BspClient {
             if (diag.source) {
                 vscDiag.source = diag.source;
             }
-            if (diag.code) {
+            if (diag.code !== undefined) {
                 vscDiag.code = diag.code;
             }
             
+            vscDiag.relatedInformation = diag.relatedInformation?.map(info => new vscode.DiagnosticRelatedInformation(
+                new vscode.Location(vscode.Uri.parse(info.location.uri), new vscode.Range(
+                    info.location.range.start.line, info.location.range.start.character,
+                    info.location.range.end.line, info.location.range.end.character
+                )), info.message
+            ));
             return vscDiag;
         });
 
-        if (params.reset) {
-            this.diagnosticsCollection.set(uri, diagnostics);
-        } else {
-            const existing = this.diagnosticsCollection.get(uri) || [];
-            this.diagnosticsCollection.set(uri, [...existing, ...diagnostics]);
-        }
+        this.diagnosticsCollection.set(uri, diagnostics);
     }
 
     private convertDiagnosticSeverity(severity?: number): vscode.DiagnosticSeverity {
@@ -507,6 +565,11 @@ export class BspClient {
     }
 
     private handleCompileResult(result: CompileResult): void {
+        if (result.statusCode === StatusCode.Cancelled) {
+            log('Task cancelled');
+            return;
+        }
+        log(`buildTarget/compile result: ${JSON.stringify(result)}`);
         const message = result.statusCode === StatusCode.Ok 
             ? 'Compilation completed successfully' 
             : 'Compilation failed';
@@ -519,6 +582,10 @@ export class BspClient {
     }
 
     private handleTestResult(result: TestResult): void {
+        if (result.statusCode === StatusCode.Cancelled) {
+            log('Task cancelled');
+            return;
+        }
         const message = result.statusCode === StatusCode.Ok 
             ? 'Tests completed successfully' 
             : 'Tests failed';
@@ -531,6 +598,11 @@ export class BspClient {
     }
 
     private handleRunResult(result: RunResult): void {
+        if (result.statusCode === StatusCode.Cancelled) {
+            log('Task cancelled');
+            return;
+        }
+        log(`buildTarget/run result: ${JSON.stringify(result)}`);
         const message = result.statusCode === StatusCode.Ok 
             ? 'Run completed successfully' 
             : 'Run failed';
@@ -548,6 +620,7 @@ export class BspClient {
             const debugAddress = result.uri;
             const data = result.data;
 
+            log(`🐛 handleDebugResult: uri=${debugAddress} data=${JSON.stringify(data)}`);
             if (debugAddress.startsWith('tcp://')) {
                 // TCP connection for DAP
                 const match = debugAddress.match(/tcp:\/\/([^:]+):(\d+)/);
@@ -565,7 +638,10 @@ export class BspClient {
                     if (data?.pid !== undefined) { config.pid = data.pid; }
                     if (data?.program !== undefined) { config.program = data.program; }
 
+                    log(`🐛 built debug config: ${JSON.stringify(config)}`);
                     await this.startVSCodeDebugSession(targetId, config);
+                } else {
+                    logError(`Debug address did not match tcp regex: ${debugAddress}`, undefined);
                 }
             } else if (debugAddress.startsWith('unix://')) {
                 // Unix socket connection
@@ -594,46 +670,58 @@ export class BspClient {
             throw new Error('No workspace folder available');
         }
 
+        log(`🐛 calling vscode.debug.startDebugging (folder=${workspaceFolder.uri.fsPath})`);
         const success = await vscode.debug.startDebugging(workspaceFolder, config);
+        log(`🐛 startDebugging returned: ${success}`);
         if (!success) {
             throw new Error('Failed to start VSCode debug session');
         }
     }
 
     private async executeWithProgress<T>(
-        operation: string, 
-        targetId: string, 
-        task: () => Promise<T>
+        operation: string,
+        targetId: string,
+        task: (originId: string, cancellation: CancellationToken) => Promise<T>
     ): Promise<T> {
-        const requestId = `${operation}-${this.requestCounter++}-${targetId}`;
-        
+        const originId = this.generateOriginId();
         return vscode.window.withProgress({
             location: vscode.ProgressLocation.Notification,
             title: `BSP ${operation}`,
             cancellable: true
         }, async (progress, token) => {
             progress.report({ message: `${operation} ${targetId}...` });
-            
-            const promise = task().catch(error => {
-                logError(`Failed to ${operation} target`, error);
-                vscode.window.showErrorMessage(`Failed to ${operation} ${targetId}: ${error.message}`);
+            this.progress.register(originId, update => progress.report(update));
+            const cancellation = new CancellationTokenSource();
+            this.cancellations.set(originId, cancellation);
+            const subscription = token.onCancellationRequested(() => cancellation.cancel());
+            if (token.isCancellationRequested) { cancellation.cancel(); }
+            const promise = task(originId, cancellation.token);
+            this.activeRequests.set(originId, promise);
+            log(`📤 ${operation} request started for ${targetId} (ID: ${originId})`);
+            try {
+                return await promise;
+            } catch (error: any) {
+                if (!cancellation.token.isCancellationRequested) {
+                    logError(`Failed to ${operation} target`, error);
+                    vscode.window.showErrorMessage(`Failed to ${operation} ${targetId}: ${error.message}`);
+                }
                 throw error;
-            }).finally(() => {
-                this.activeRequests.delete(requestId);
-                log(`✅ ${operation} request completed for ${targetId}`);
-            });
-            
-            this.activeRequests.set(requestId, promise);
-            log(`📤 ${operation} request started for ${targetId} (ID: ${requestId})`);
-            
-            // Handle cancellation
-            token.onCancellationRequested(() => {
-                log(`🚫 ${operation} request cancelled for ${targetId}`);
-                this.activeRequests.delete(requestId);
-            });
-            
-            return promise;
+            } finally {
+                subscription.dispose();
+                cancellation.dispose();
+                this.cancellations.delete(originId);
+                this.activeRequests.delete(originId);
+                this.progress.unregister(originId);
+                log(`${operation} request finished for ${targetId}`);
+            }
         });
+    }
+
+    private clearTaskState(): void {
+        this.cancelAllRequests();
+        this.progress.dispose();
+        this.diagnostics.clear();
+        this.diagnosticsCollection.clear();
     }
 
     private generateOriginId(): string {
@@ -654,6 +742,6 @@ export class BspClient {
 
     cancelAllRequests(): void {
         log(`🚫 Cancelling ${this.activeRequests.size} active requests`);
-        this.activeRequests.clear();
+        for (const cancellation of this.cancellations.values()) { cancellation.cancel(); }
     }
 }

@@ -240,3 +240,24 @@ export interface SelectorConfiguration {
 export interface DynamicSelectorResponse {
     selectors: SelectorConfiguration[];
 }
+export interface TaskIdentifier { id: string; parents?: string[] }
+export interface TaskStartParams {
+    taskId: TaskIdentifier | string;
+    originId?: string;
+    eventTime?: number;
+    message?: string;
+}
+export interface TaskProgressParams extends TaskStartParams {
+    progress?: number;
+    total?: number;
+    unit?: string;
+}
+export interface TaskFinishParams extends TaskStartParams { status: StatusCode }
+
+export interface OutputPathItem {
+    uri: string;
+    kind: 1 | 2;
+}
+export interface OutputPathsResult {
+    items: { target: BuildTargetIdentifier; outputPaths: OutputPathItem[] }[];
+}
