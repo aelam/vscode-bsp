@@ -467,7 +467,7 @@ export class BspClient {
 
         // Capture stderr for debugging
         this.serverProcess.stderr.on('data', (data) => {
-            logError('BSP server stderr', data.toString());
+            log(`BSP server stderr: ${data.toString()}`);
         });
 
         // Create JSON-RPC connection
@@ -566,7 +566,8 @@ export class BspClient {
             this.progress.finish(params);
             const status = params.status === StatusCode.Ok ? '✓'
                 : params.status === StatusCode.Cancelled ? 'Cancelled:' : 'Failed:';
-            buildLog(`${status} ${params.message || 'Task finished'} [${taskId(params.taskId)}]`);
+            const type = params.status === StatusCode.Ok ? 3 : params.status === StatusCode.Cancelled ? 2 : 1;
+            buildLog(`${status} ${params.message || 'Task finished'} [${taskId(params.taskId)}]`, type);
             vscode.window.setStatusBarMessage(`BSP: ${params.message || 'Task finished'}`, 2000);
         });
 
@@ -577,8 +578,7 @@ export class BspClient {
 
         this.connection.onNotification('build/logMessage', (params: { type: number; message: string; originId?: string }) => {
             this.emitTestEvent({ kind: 'log', params });
-            const prefix = params.type === 1 ? 'Error: ' : params.type === 2 ? 'Warning: ' : '';
-            buildLog(prefix + params.message);
+            buildLog(params.message, params.type);
             if (params.type === 1) {
                 if (!this.testOrigins.has(params.originId ?? '')) { showBuildOutput(); }
                 logError(params.message);

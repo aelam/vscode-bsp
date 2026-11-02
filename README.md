@@ -66,9 +66,14 @@ BSP task notifications update the progress notification. When a server supplies 
 `progress` and `total`, the client shows a percentage. Otherwise, it shows the stage
 and any reported count. Cancel sends `$/cancelRequest` to the server.
 
-`build/logMessage` appears in **Output → vscode-bsp-log**. Compiler diagnostics appear
-in **Problems** and are tracked separately for each target. The server supplies the
-messages; the client does not parse tool-specific build output.
+`build/logMessage` appears in **Output → vscode-bsp-log**. Both Output channels use
+VS Code's log styling and level filters: errors use Error, warnings and cancelled
+tasks use Warning, and other output uses Info. Failed tasks use Error even when
+the preceding progress messages are informational. Colors follow the active theme.
+
+Compiler diagnostics appear in **Problems** and are tracked separately for each
+target. The server supplies the messages and severity; the client does not parse
+tool-specific build output. Raw process output without a level stays informational.
 
 Right-click a build target and choose **Reveal Build Output**, or run **BSP: Reveal
 Build Output** from the Command Palette. The client requests `buildTarget/outputPaths`

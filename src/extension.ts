@@ -14,7 +14,7 @@ let bspClient: BspClient | undefined;
 let buildTargetProvider: BuildTargetProvider | undefined;
 let connectionManager: BspConnectionManager | undefined;
 let multiBspProvider: MultiBspProvider | undefined;
-let outputChannel: vscode.OutputChannel | undefined;
+let outputChannel: vscode.LogOutputChannel | undefined;
 
 // Helper function to get or select a build target when item is not provided
 async function getOrSelectBuildTarget(item?: any): Promise<any> {
@@ -134,12 +134,12 @@ async function getOrSelectBuildTarget(item?: any): Promise<any> {
 
 export async function activate(context: vscode.ExtensionContext) {
     // Create output channels
-    outputChannel = vscode.window.createOutputChannel('vscode-bsp');
+    outputChannel = vscode.window.createOutputChannel('vscode-bsp', { log: true });
     context.subscriptions.push(outputChannel);
 
     // Dedicated channel for build/compile output streamed from the server,
     // switchable in the Output dropdown next to 'vscode-bsp'.
-    const buildOutputChannel = vscode.window.createOutputChannel('vscode-bsp-log');
+    const buildOutputChannel = vscode.window.createOutputChannel('vscode-bsp-log', { log: true });
     context.subscriptions.push(buildOutputChannel);
 
     // Initialize loggers
