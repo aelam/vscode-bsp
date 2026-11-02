@@ -455,7 +455,7 @@
     "pretest": "npm run compile && npm run lint",
     "lint": "eslint src --ext ts",
     "test": "node ./out/test/runTest.js",
-    "test:protocol": "npm run compile && node --test test/protocol.test.cjs",
+    "test:protocol": "npm run compile && node --test test/*.test.cjs",
     "package": "vsce package",
     "install-local": "code --install-extension vscode-bsp-*.vsix"
   },

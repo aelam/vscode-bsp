@@ -246,6 +246,8 @@ export interface TaskStartParams {
     originId?: string;
     eventTime?: number;
     message?: string;
+    dataKind?: string;
+    data?: unknown;
 }
 export interface TaskProgressParams extends TaskStartParams {
     progress?: number;
@@ -253,6 +255,19 @@ export interface TaskProgressParams extends TaskStartParams {
     unit?: string;
 }
 export interface TaskFinishParams extends TaskStartParams { status: StatusCode }
+
+export enum TestStatus { Passed = 1, Failed = 2, Ignored = 3, Cancelled = 4, Skipped = 5 }
+export interface TestStart { displayName: string }
+export interface TestFinish extends TestStart { status: TestStatus; message?: string }
+export interface TestReport {
+    target: BuildTargetIdentifier;
+    passed: number;
+    failed: number;
+    ignored: number;
+    cancelled: number;
+    skipped: number;
+    time?: number;
+}
 
 export interface OutputPathItem {
     uri: string;

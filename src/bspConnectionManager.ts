@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
+import { randomUUID } from 'crypto';
 import { BspClient } from './bspClient';
 import { logError, logInfo } from './logger';
 
@@ -38,13 +39,22 @@ export class BspConnectionManager {
             for (const [name, type] of entries) {
                 if (type === vscode.FileType.File && name.endsWith('.json')) {
                     const configPath = path.join(bspDir.fsPath, name);
-                    const displayName = path.basename(name, '.json');
+                    let displayName = path.basename(name, '.json');
+                    try {
+                        const content = await vscode.workspace.fs.readFile(vscode.Uri.joinPath(bspDir, name));
+                        const config = JSON.parse(Buffer.from(content).toString('utf8'));
+                        if (typeof config?.name === 'string' && config.name.trim()) {
+                            displayName = config.name.trim();
+                        }
+                    } catch (error) {
+                        logError(`Error reading BSP configuration: ${configPath}`, error);
+                    }
                     
                     configs.push({
                         name: displayName,
                         configPath,
                         workspaceUri,
-                        displayName: displayName.charAt(0).toUpperCase() + displayName.slice(1)
+                        displayName
                     });
                 }
             }
@@ -56,7 +66,7 @@ export class BspConnectionManager {
     }
 
     async addConnection(config: BspConnectionConfig): Promise<string> {
-        const connectionId = `${config.name}_${Date.now()}`;
+        const connectionId = `${config.name}_${randomUUID()}`;
         const client = new BspClient(config.workspaceUri, config.configPath, () => {
             // Notify when targets are updated for this connection
             this._onDidUpdateTargets.fire(connectionId);
@@ -70,10 +80,32 @@ export class BspConnectionManager {
         };
         
         this.connections.set(connectionId, connection);
+        this.updateDisplayNames();
         this._onDidChangeConnections.fire();
         
         logInfo(`Added BSP connection: ${config.displayName || config.name}`);
         return connectionId;
+    }
+
+    private updateDisplayNames(): void {
+        const connections = this.getAllConnections();
+        const workspaceName = (config: BspConnectionConfig) =>
+            vscode.workspace.getWorkspaceFolder(config.workspaceUri)?.name ?? path.basename(config.workspaceUri.fsPath);
+        for (const connection of connections) {
+            const config = connection.config;
+            const matches = connections.filter(other => other.config.name === config.name);
+            config.displayName = config.name;
+            if (matches.length < 2) { continue; }
+            let workspace = workspaceName(config);
+            if (matches.some(other => workspaceName(other.config) === workspace
+                && other.config.workspaceUri.toString() !== config.workspaceUri.toString())) {
+                workspace = config.workspaceUri.fsPath;
+            }
+            const sameWorkspace = matches.filter(other =>
+                other.config.workspaceUri.toString() === config.workspaceUri.toString());
+            const suffix = sameWorkspace.length > 1 ? `${workspace}, ${path.basename(config.configPath)}` : workspace;
+            config.displayName = `${config.name} (${suffix})`;
+        }
     }
 
     async connectToServer(connectionId: string): Promise<void> {
@@ -127,6 +159,7 @@ export class BspConnectionManager {
         if (connection) {
             await this.disconnectFromServer(connectionId);
             this.connections.delete(connectionId);
+            this.updateDisplayNames();
             this._onDidChangeConnections.fire();
             
             logInfo(`Removed BSP connection: ${connection.config.displayName}`);
