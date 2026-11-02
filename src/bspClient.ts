@@ -383,11 +383,27 @@ export class BspClient {
     }
 
     debug(target: BuildTarget): Promise<DebugSessionAddressResult> {
+        return this.debugTarget(target, target.capabilities?.canTest === true && !target.capabilities.canRun);
+    }
+
+    debugTests(target: BuildTarget): Promise<DebugSessionAddressResult> {
+        return this.debugTarget(target, true);
+    }
+
+    private debugTarget(target: BuildTarget, testing: boolean): Promise<DebugSessionAddressResult> {
         return this.executeWithProgress('debug', target.id.uri, async (originId, cancellation) => {
-            const result = await this.requestDebugSession(target, originId, cancellation);
+            if (testing && (!target.capabilities.canTest || !target.capabilities.canDebug)) {
+                throw new Error('This build target does not support test debugging');
+            }
+            const result = await this.requestDebugSession(target, originId, cancellation, testing);
             if (cancellation.isCancellationRequested) { throw new Error('Debug cancelled'); }
             this.operations.get(target.id.uri)?.report('Connecting debugger');
-            await this.startVSCodeDebugSession(this.configurationForDebugResult(result, target.id.uri));
+            const configuration = this.configurationForDebugResult(result, target.id.uri);
+            if (testing) {
+                configuration.name = `Debug Tests: ${target.displayName || target.id.uri}`;
+                configuration.stopOnEntry = false;
+            }
+            await this.startVSCodeDebugSession(configuration);
             return result;
         });
     }
@@ -400,7 +416,7 @@ export class BspClient {
         }, { token });
     }
 
-    private async requestDebugSession(target: BuildTarget, originId: string, token: CancellationToken): Promise<DebugSessionAddressResult> {
+    private async requestDebugSession(target: BuildTarget, originId: string, token: CancellationToken, testing = false): Promise<DebugSessionAddressResult> {
         const targetId = target.id.uri;
         
         if (!this.connection) {
@@ -409,16 +425,17 @@ export class BspClient {
 
         await this.stopPreviousDebugSession(targetId);
 
-        // Send the same build arguments as run (configuration + destination) so
-        // the debug build targets the selected simulator/device instead of
-        // defaulting to Mac Catalyst (which then fails code signing).
+        // Use the selected arguments for the operation being debugged.
         let debugArgs: string[] = [];
         if (this.buildSystemManager && this.buildSystemManager.canHandle(target)) {
             try {
-                debugArgs = await this.buildSystemManager.getRunArguments(target);
+                debugArgs = testing
+                    ? await this.buildSystemManager.getTestArguments(target)
+                    : await this.buildSystemManager.getRunArguments(target);
                 log(`🔧 Generated debug arguments: [${debugArgs.join(', ')}]`);
             } catch (error) {
                 logError('Failed to get debug arguments from BuildSystemManager', error);
+                if (testing) { throw error; }
             }
         }
 

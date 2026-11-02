@@ -158,10 +158,24 @@ locations, and selection data through `TestDiscovery`; the Testing controller do
 not parse Swift or Xcode logs. Display names alone never make a case runnable.
 
 With sourcekit-bsp, case results arrive after each target completes. Parameterized
-tests run as a whole function; individual arguments and test debugging are not
-supported. Output is available in Test Results and **Output → vscode-bsp-log**.
+tests run as a whole function; individual arguments are not supported.
+Output is available in Test Results and **Output → vscode-bsp-log**.
 See the server's [test selection contract](https://github.com/aelam/sourcekit-bsp/blob/main/Docs/wiki/Build-Run-Test-Debug.md#test-discovery-and-selection)
 for the optional metadata and payloads.
+
+### Debug a test target
+
+In **Build Targets**, click the **Debug Target** icon beside a test target.
+The command is also available as **BSP: Debug Tests** in the Command Palette.
+It uses the target's selected test configuration and destination. The server must
+advertise both `canTest` and `canDebug`. The client requests `debugSession/start`
+and connects to the returned DAP endpoint.
+
+With sourcekit-bsp, this runs the whole app-hosted unit test target on an iOS
+simulator. Set breakpoints on executable lines in the test source before starting.
+UI tests, physical-device test debugging, and individual test selection are not
+supported yet. This entry is in Build Targets; the Testing panel's Run Tests
+profile keeps its existing behavior and result reports.
 
 ### Activation
 

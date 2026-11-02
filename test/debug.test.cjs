@@ -178,3 +178,36 @@ test('default configuration and schema are registered under contributes without 
     assert.equal(JSON.stringify(contribution).includes('5005'), false);
     assert.equal(JSON.stringify(contribution).includes('AskForProgramName'), false);
 });
+
+test('test targets use the debug icon with test arguments and do not stop at entry', async () => {
+    const client = new BspClient(folder.uri, undefined, undefined, {
+        getDebugInfo: () => ({}), canHandle: () => true,
+        getRunArguments: () => assert.fail('Test debugging must use test settings'),
+        getTestArguments: async () => ['-configuration', 'Debug', '-destination', 'id=SIM']
+    });
+    const target = { id: { uri: 'target://tests' }, displayName: 'Tests', capabilities: { canTest: true, canDebug: true, canRun: false } };
+    client.connection = { sendRequest: async (method, params) => {
+        assert.equal(method, 'debugSession/start');
+        assert.deepEqual(params.targets, [target.id]);
+        assert.deepEqual(params.arguments, ['-configuration', 'Debug', '-destination', 'id=SIM']);
+        return { uri: 'tcp://127.0.0.1:25001', data: { request: 'attach', pid: 1234 } };
+    } };
+    try {
+        for (const start of [client.debug.bind(client), client.debugTests.bind(client)]) {
+            await start(target);
+            assert.equal(starts.at(-1)[1].stopOnEntry, false);
+            assert.equal(starts.at(-1)[1].request, 'attach');
+            assert.equal(starts.at(-1)[1].pid, 1234);
+            assert.match(starts.at(-1)[1].name, /Debug Tests/);
+        }
+        await assert.rejects(client.debugTests({ ...target, capabilities: { canTest: true, canDebug: false } }), /does not support/);
+        const menus = require('../package.json').contributes.menus['view/item/context'];
+        assert.equal(menus.some(m => m.command === 'bsp.debugTests'), false);
+        const icon = menus.find(m => m.command === 'bsp.debug');
+        assert.match(icon.group, /inline/);
+        assert.match(icon.when, /canDebug/);
+        assert.match(icon.when, /busy/);
+        client.buildSystemManager.getTestArguments = async () => { throw new Error('Invalid test destination'); };
+        await assert.rejects(client.debug(target), /Invalid test destination/);
+    } finally { client.debugSessions.dispose(); starts.length = 0; }
+});

@@ -327,6 +327,12 @@
         "command": "bsp.showBuildOutput",
         "title": "Show BSP Build Output",
         "category": "BSP"
+      },
+      {
+        "command": "bsp.debugTests",
+        "title": "Debug Tests",
+        "category": "BSP",
+        "icon": "$(debug-alt)"
       }
     ],
     "views": {
