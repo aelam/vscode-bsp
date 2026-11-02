@@ -1,6 +1,7 @@
 import { BspTestEvent, BspTestOptions } from './bspTestEvents';
 import { testTaskMessage } from './bspTestReports';
 import * as vscode from 'vscode';
+import { debugConfiguration } from './debugConfiguration';
 import { 
     createMessageConnection, 
     MessageConnection, 
@@ -349,10 +350,21 @@ export class BspClient {
     }
 
     debug(target: BuildTarget): Promise<DebugSessionAddressResult> {
-        return this.withLaunchLock(target.id.uri, () => this.debugTarget(target));
+        return this.withLaunchLock(target.id.uri, async () => {
+            const result = await this.requestDebugSession(target);
+            await this.startVSCodeDebugSession(this.configurationForDebugResult(result, target.id.uri));
+            return result;
+        });
     }
 
-    private async debugTarget(target: BuildTarget): Promise<DebugSessionAddressResult> {
+    prepareDebugConfiguration(target: BuildTarget, token?: vscode.CancellationToken): Promise<vscode.DebugConfiguration> {
+        return this.withLaunchLock(target.id.uri, async () => {
+            const result = await this.requestDebugSession(target, token);
+            return this.configurationForDebugResult(result, target.id.uri);
+        });
+    }
+
+    private async requestDebugSession(target: BuildTarget, token?: vscode.CancellationToken): Promise<DebugSessionAddressResult> {
         const targetId = target.id.uri;
         
         if (!this.connection) {
@@ -382,9 +394,10 @@ export class BspClient {
 
         try {
             log(`🐛 Starting debug for ${target.displayName || targetId}`);
-            const result: DebugSessionAddressResult = await this.connection.sendRequest('debugSession/start', params);
+            const result: DebugSessionAddressResult = await this.connection.sendRequest(
+                'debugSession/start', params, token ?? CancellationToken.None
+            );
             log(`🐛 debugSession/start result: ${JSON.stringify(result)}`);
-            await this.handleDebugResult(result, targetId);
             return result;
         } catch (error) {
             logError('Failed to start debug session', error);
@@ -694,69 +707,18 @@ export class BspClient {
         }
     }
 
-    private async handleDebugResult(result: DebugSessionAddressResult, targetId: string): Promise<void> {
-        try {
-            // Parse the debug address (could be DAP over TCP, Unix socket, etc.)
-            const debugAddress = result.uri;
-            const data = result.data;
-
-            log(`🐛 handleDebugResult: uri=${debugAddress} data=${JSON.stringify(data)}`);
-            if (debugAddress.startsWith('tcp://')) {
-                // TCP connection for DAP
-                const match = debugAddress.match(/tcp:\/\/([^:]+):(\d+)/);
-                if (match) {
-                    const host = match[1];
-                    const port = parseInt(match[2]);
-
-                    // macOS -> launch (program); simulator -> attach (pid).
-                    const config: vscode.DebugConfiguration = {
-                        type: 'bsp-debug',
-                        name: `Debug ${targetId}`,
-                        request: data?.request ?? 'attach',
-                        connect: { host, port }
-                    };
-                    if (data?.pid !== undefined) { config.pid = data.pid; }
-                    if (data?.program !== undefined) { config.program = data.program; }
-
-                    log(`🐛 built debug config: ${JSON.stringify(config)}`);
-                    await this.startVSCodeDebugSession(targetId, config);
-                } else {
-                    logError(`Debug address did not match tcp regex: ${debugAddress}`, undefined);
-                }
-            } else if (debugAddress.startsWith('unix://')) {
-                // Unix socket connection
-                const socketPath = debugAddress.replace('unix://', '');
-                
-                await this.startVSCodeDebugSession(targetId, {
-                    type: 'bsp-debug',
-                    name: `Debug ${targetId}`,
-                    request: 'attach',
-                    connect: {
-                        socket: socketPath
-                    }
-                });
-            }
-            
-            vscode.window.showInformationMessage(`Debug session started for ${targetId}`);
-        } catch (error) {
-            logError('Failed to start debug session', error);
-            vscode.window.showErrorMessage(`Failed to start debug session: ${error}`);
-        }
+    private configurationForDebugResult(result: DebugSessionAddressResult, targetId: string): vscode.DebugConfiguration {
+        return {
+            ...debugConfiguration(result, `Debug ${targetId}`),
+            ...this.debugSessions.configuration(targetId)
+        };
     }
 
-    private async startVSCodeDebugSession(_targetId: string, config: vscode.DebugConfiguration): Promise<void> {
-        const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
-        if (!workspaceFolder) {
-            throw new Error('No workspace folder available');
-        }
-
-        Object.assign(config, this.debugSessions.configuration(_targetId));
-        log(`🐛 calling vscode.debug.startDebugging (folder=${workspaceFolder.uri.fsPath})`);
-        const success = await vscode.debug.startDebugging(workspaceFolder, config);
-        log(`🐛 startDebugging returned: ${success}`);
-        if (!success) {
-            throw new Error('Failed to start VSCode debug session');
-        }
+    private async startVSCodeDebugSession(config: vscode.DebugConfiguration): Promise<void> {
+        const folder = vscode.workspace.getWorkspaceFolder(this.workspaceUri);
+        if (!folder) { throw new Error('The BSP workspace is no longer open'); }
+        const success = await vscode.debug.startDebugging(folder, config);
+        if (!success) { throw new Error('Failed to start VSCode debug session'); }
     }
 
     private async executeWithProgress<T>(
