@@ -29,7 +29,7 @@ function reportOperationError(error: unknown): void {
 }
 
 // Helper function to get or select a build target when item is not provided
-async function getOrSelectBuildTarget(item?: any): Promise<any> {
+async function getOrSelectBuildTarget(item?: any, include: (target: BuildTarget) => boolean = () => true): Promise<any> {
     // If item is provided, return it
     if (item) {
         return item;
@@ -46,7 +46,7 @@ async function getOrSelectBuildTarget(item?: any): Promise<any> {
                 
                 for (const { client, connectionId } of connectedClients) {
                     const targets = await client.getBuildTargets();
-                    targets.forEach(target => {
+                    targets.filter(include).forEach(target => {
                         allTargets.push({
                             label: target.displayName || target.id.uri,
                             description: target.id.uri,
@@ -79,7 +79,7 @@ async function getOrSelectBuildTarget(item?: any): Promise<any> {
         } else if (bspClient?.connected) {
             // Fallback to single BSP client
             try {
-                const targets = await bspClient.getBuildTargets();
+                const targets = (await bspClient.getBuildTargets()).filter(include);
                 if (targets.length === 0) {
                     vscode.window.showInformationMessage('No build targets available');
                     return null;
@@ -111,7 +111,7 @@ async function getOrSelectBuildTarget(item?: any): Promise<any> {
     } else if (bspClient?.connected) {
         // Fallback to single BSP client
         try {
-            const targets = await bspClient.getBuildTargets();
+            const targets = (await bspClient.getBuildTargets()).filter(include);
             if (targets.length === 0) {
                 vscode.window.showInformationMessage('No build targets available');
                 return null;
@@ -535,6 +535,22 @@ async function initializeBspExtension(context: vscode.ExtensionContext) {
         }
     });
 
+    const debugTestsCommand = vscode.commands.registerCommand('bsp.debugTests', async item => {
+        const selected = await getOrSelectBuildTarget(item, target => target.capabilities.canTest && target.capabilities.canDebug);
+        if (!selected?.buildTarget) { return; }
+        const client = selected.connectionId
+            ? connectionManager?.getConnection(selected.connectionId)?.client : bspClient;
+        if (!client?.connected) {
+            void vscode.window.showErrorMessage('BSP server not connected');
+            return;
+        }
+        try { await client.debugTests(selected.buildTarget); }
+        catch (error) {
+            if (error instanceof TargetBusyError) { reportOperationError(error); }
+            else { logError('Failed to debug tests', error); }
+        }
+    });
+
     const cancelOperationCommand = vscode.commands.registerCommand('bsp.cancelOperation', async item => {
         const selected = await getOrSelectBuildTarget(item);
         if (!selected?.buildTarget) { return; }
@@ -626,6 +642,7 @@ async function initializeBspExtension(context: vscode.ExtensionContext) {
         testCommand,
         runCommand,
         debugCommand,
+        debugTestsCommand,
         cancelOperationCommand,
         compileDisabledCommand,
         testDisabledCommand,
