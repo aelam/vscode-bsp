@@ -68,7 +68,18 @@ test('client connects task notifications to the request window and sends cancell
     const originalLoad = Module._load;
     const reports = [], errors = [];
     let cancel;
+    const debugStarted = new Set(), debugStopped = new Set();
+    const debug = {
+        activeDebugSession: undefined,
+        onDidStartDebugSession: listener => { debugStarted.add(listener); return { dispose: () => debugStarted.delete(listener) }; },
+        onDidTerminateDebugSession: listener => { debugStopped.add(listener); return { dispose: () => debugStopped.delete(listener) }; },
+        stopDebugging: async session => {
+            for (const listener of [...debugStopped]) { listener(session); }
+            if (debug.activeDebugSession === session) { debug.activeDebugSession = undefined; }
+        }
+    };
     const vscode = {
+        debug,
         languages: { createDiagnosticCollection: () => ({ clear() {}, set() {} }) },
         window: {
             withProgress: (_options, action) => action({ report: update => reports.push(update) }, {
@@ -121,6 +132,51 @@ test('client connects task notifications to the request window and sends cancell
         ] };
     };
     assert.deepEqual(await client.getOutputPaths(target), [path]);
+
+    const sequence = [];
+    const configuration = client.debugSessions.configuration(target.id.uri);
+    const session = {
+        id: 'debug-hello', type: 'bsp-debug', name: 'Debug Hello', configuration,
+        customRequest: async (method, params) => {
+            assert.equal(method, 'disconnect');
+            assert.deepEqual(params, { terminateDebuggee: true });
+            sequence.push('disconnect');
+        }
+    };
+    debug.activeDebugSession = session;
+    for (const listener of debugStarted) { listener(session); }
+    client.connection.sendRequest = async (method, params) => {
+        assert.equal(method, 'buildTarget/run');
+        assert.equal(debug.activeDebugSession, undefined);
+        sequence.push('run');
+        handlers.get('build/taskStart')({ taskId: { id: 'run' }, originId: params.originId });
+        handlers.get('build/taskProgress')({ taskId: { id: 'run' }, message: 'Installing Hello' });
+        handlers.get('build/taskFinish')({ taskId: { id: 'run' }, status: 1, message: 'Run completed' });
+        return { statusCode: 1, originId: params.originId };
+    };
+    assert.equal((await client.run(target)).statusCode, 1);
+    assert.deepEqual(sequence, ['disconnect', 'run']);
+    assert.ok(reports.some(report => report.message === 'Installing Hello'));
+
+    let releaseRun;
+    client.connection.sendRequest = () => new Promise(resolve => { releaseRun = resolve; });
+    const firstRun = client.run(target);
+    await new Promise(resolve => setImmediate(resolve));
+    await assert.rejects(client.run(target), /already starting/);
+    await assert.rejects(client.debug(target), /already starting/);
+    releaseRun({ statusCode: 1 });
+    await firstRun;
+
+    session.customRequest = async () => { throw new Error('Cannot stop debugger'); };
+    debug.activeDebugSession = session;
+    client.connection.sendRequest = () => assert.fail('Must not run while stopping debug failed');
+    await assert.rejects(client.run(target), /Cannot stop debugger/);
+    assert.equal(client.launchRequests.size, 0);
+    assert.equal(client.getActiveRequests().size, 0);
+    debug.activeDebugSession = undefined;
+    client.debugSessions.dispose();
+    assert.equal(debugStarted.size, 0);
+    assert.equal(debugStopped.size, 0);
 });
 
 test('reveals server output paths, supports selection, and handles missing products', async () => {

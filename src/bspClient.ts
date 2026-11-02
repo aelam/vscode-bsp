@@ -8,6 +8,7 @@ import {
     CancellationTokenSource
 } from 'vscode-jsonrpc/node';
 import { BspProgress, taskId } from './bspProgress';
+import { BspDebugSessions } from './bspDebugSessions';
 import { BspDiagnostics } from './bspDiagnostics';
 import { spawn, ChildProcess } from 'child_process';
 import { buildLog, log, logError, logInfo, showBuildOutput } from './logger';
@@ -56,9 +57,12 @@ export class BspClient {
     private diagnostics = new BspDiagnostics();
     private cancellations = new Map<string, CancellationTokenSource>();
     private onTargetsUpdated?: () => void;
+    private debugSessions: BspDebugSessions;
+    private launchRequests = new Set<string>();
 
     constructor(workspaceUri: vscode.Uri, private configPath?: string, onTargetsUpdated?: () => void, private buildSystemManager?: any) {
         this.workspaceUri = workspaceUri;
+        this.debugSessions = new BspDebugSessions(configPath ?? workspaceUri.fsPath);
         this.diagnosticsCollection = vscode.languages.createDiagnosticCollection('bsp');
         this.onTargetsUpdated = onTargetsUpdated;
         
@@ -258,6 +262,10 @@ export class BspClient {
     }
 
     run(target: BuildTarget): Promise<RunResult> {
+        return this.withLaunchLock(target.id.uri, () => this.runTarget(target));
+    }
+
+    private runTarget(target: BuildTarget): Promise<RunResult> {
         const targetId = target.id.uri;
         
         return this.executeWithProgress('run', targetId, async (originId, cancellation) => {
@@ -265,6 +273,8 @@ export class BspClient {
                 throw new Error('BSP client not connected');
             }
 
+            await this.stopPreviousDebugSession(targetId);
+            if (cancellation.isCancellationRequested) { throw new Error('Run cancelled'); }
             let runArgs: string[] = [];
             
             // Get run arguments from BuildSystemManager (if available)
@@ -290,12 +300,18 @@ export class BspClient {
         });
     }
 
-    async debug(target: BuildTarget): Promise<DebugSessionAddressResult> {
+    debug(target: BuildTarget): Promise<DebugSessionAddressResult> {
+        return this.withLaunchLock(target.id.uri, () => this.debugTarget(target));
+    }
+
+    private async debugTarget(target: BuildTarget): Promise<DebugSessionAddressResult> {
         const targetId = target.id.uri;
         
         if (!this.connection) {
             throw new Error('BSP client not connected');
         }
+
+        await this.stopPreviousDebugSession(targetId);
 
         // Send the same build arguments as run (configuration + destination) so
         // the debug build targets the selected simulator/device instead of
@@ -670,6 +686,7 @@ export class BspClient {
             throw new Error('No workspace folder available');
         }
 
+        Object.assign(config, this.debugSessions.configuration(_targetId));
         log(`🐛 calling vscode.debug.startDebugging (folder=${workspaceFolder.uri.fsPath})`);
         const success = await vscode.debug.startDebugging(workspaceFolder, config);
         log(`🐛 startDebugging returned: ${success}`);
@@ -717,7 +734,25 @@ export class BspClient {
         });
     }
 
+    private async stopPreviousDebugSession(targetId: string): Promise<void> {
+        await this.debugSessions.stop(targetId, message => {
+            showBuildOutput();
+            buildLog(message);
+            log(message);
+        });
+    }
+
+    private async withLaunchLock<T>(targetId: string, operation: () => Promise<T>): Promise<T> {
+        if (this.launchRequests.has(targetId)) {
+            throw new Error('Run or Debug is already starting for this target. Wait for it to finish or cancel it.');
+        }
+        this.launchRequests.add(targetId);
+        try { return await operation(); }
+        finally { this.launchRequests.delete(targetId); }
+    }
+
     private clearTaskState(): void {
+        this.debugSessions.dispose();
         this.cancelAllRequests();
         this.progress.dispose();
         this.diagnostics.clear();
