@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const { test } = require('node:test');
 const Module = require('node:module');
 const { PassThrough } = require('node:stream');
-const { createMessageConnection, StreamMessageReader, StreamMessageWriter, CancellationTokenSource } = require('vscode-jsonrpc/node');
+const { createMessageConnection, StreamMessageReader, StreamMessageWriter, CancellationToken, CancellationTokenSource } = require('vscode-jsonrpc/node');
 const { debugConfiguration } = require('../out/debugConfiguration');
 
 const starts = [];
@@ -13,6 +13,11 @@ const vscode = {
     DebugAdapterNamedPipeServer: class { constructor(path) { this.path = path; } },
     languages: { createDiagnosticCollection: () => ({}) },
     workspace: { getWorkspaceFolder: () => folder },
+    ProgressLocation: { Notification: 15 },
+    window: {
+        withProgress: (_options, action) => action({ report() {} }, CancellationToken.None),
+        showErrorMessage() {}, showInformationMessage() {}
+    },
     debug: {
         onDidStartDebugSession: () => ({ dispose() {} }),
         onDidTerminateDebugSession: () => ({ dispose() {} }),
@@ -53,13 +58,14 @@ test('F5 prepares one BSP request and does not start a nested VS Code session', 
         getRunArguments: async () => ['-configuration', 'Debug', '-destination', 'id=PHONE']
     });
     const target = { id: { uri: 'target://hello' }, displayName: 'Hello' };
-    const token = { isCancellationRequested: false };
+    const token = CancellationToken.None;
     let requests = 0;
     client.connection = { sendRequest: async (method, params, receivedToken) => {
         assert.equal(method, 'debugSession/start');
         assert.deepEqual(params.targets, [target.id]);
         assert.deepEqual(params.arguments, ['-configuration', 'Debug', '-destination', 'id=PHONE']);
-        assert.equal(receivedToken, token);
+        assert.equal(receivedToken.isCancellationRequested, false);
+        assert.equal(typeof receivedToken.onCancellationRequested, 'function');
         requests++;
         return { uri: `tcp://127.0.0.1:${20000 + requests}`, data: { request: 'attach', pid: 42 } };
     } };

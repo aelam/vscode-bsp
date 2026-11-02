@@ -81,6 +81,19 @@ For sbt projects:
 
 ### Progress and build output
 
+Background BSP tasks, including index preparation, appear in the status bar.
+The item shows the server's task name and current phase. It shows a percentage
+only when the server reports a valid total. Click it to open BSP build output.
+Successful and cancelled tasks remain visible for five seconds; failures remain
+visible until another background task starts or the connection closes.
+This reports BSP index preparation, not SourceKit-LSP's code indexing. Tasks on
+SourceKit-LSP's separate BSP connection are not visible to this client.
+
+While a target operation is pending, its buttons show a spinner, the current
+phase, and a cancel action. Build, test, run, and debug share one operation lock
+per target and connection. Cancellation keeps the lock until the request ends.
+Different targets and servers can still run operations at the same time.
+
 BSP task notifications update the progress notification. When a server supplies both
 `progress` and `total`, the client shows a percentage. Otherwise, it shows the stage
 and any reported count. Cancel sends `$/cancelRequest` to the server.

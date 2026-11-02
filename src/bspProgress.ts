@@ -67,6 +67,8 @@ export class BspProgress {
         }
     }
 
+    isBackground(id: string): boolean { return this.tasks.get(id)?.close !== undefined; }
+
     dispose(): void {
         for (const session of new Set(this.tasks.values())) { session.close?.(); }
         this.tasks.clear();

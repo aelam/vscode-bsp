@@ -145,9 +145,9 @@ test('client connects task notifications to the request window and sends cancell
     handlers.get('build/taskStart')({ taskId: { id: 'case', parents: ['tests'] }, dataKind: 'test-start', data: { displayName: 'example()' } });
     handlers.get('build/taskFinish')({ taskId: { id: 'case', parents: ['tests'] }, status: 2, dataKind: 'test-finish', data: { displayName: 'example()', status: 2, message: 'Expected 1, got 2' } });
     handlers.get('build/taskFinish')({ taskId: { id: 'tests' }, status: 2, dataKind: 'test-report', data: { target: { uri: 'target://tests' }, passed: 0, failed: 1, ignored: 0, cancelled: 0, skipped: 0, time: 1500 } });
-    assert.ok(reports.some(report => report.message === 'Test: example()'));
-    assert.ok(reports.some(report => report.message === 'example(): failed\nExpected 1, got 2'));
-    assert.ok(reports.some(report => /0 passed, 1 failed.*1.50s/.test(report.message)));
+    assert.equal(client.backgroundTasks.active.length, 0);
+    assert.equal(client.backgroundTasks.last.status, 2);
+    assert.match(client.backgroundTasks.last.message, /0 passed, 1 failed.*1.50s/);
 
     const sequence = [];
     const configuration = client.debugSessions.configuration(target.id.uri);
@@ -178,8 +178,8 @@ test('client connects task notifications to the request window and sends cancell
     client.connection.sendRequest = () => new Promise(resolve => { releaseRun = resolve; });
     const firstRun = client.run(target);
     await new Promise(resolve => setImmediate(resolve));
-    await assert.rejects(client.run(target), /already starting/);
-    await assert.rejects(client.debug(target), /already starting/);
+    await assert.rejects(client.run(target), /Wait for the current operation/);
+    await assert.rejects(client.debug(target), /Wait for the current operation/);
     releaseRun({ statusCode: 1 });
     await firstRun;
 
@@ -187,7 +187,7 @@ test('client connects task notifications to the request window and sends cancell
     debug.activeDebugSession = session;
     client.connection.sendRequest = () => assert.fail('Must not run while stopping debug failed');
     await assert.rejects(client.run(target), /Cannot stop debugger/);
-    assert.equal(client.launchRequests.size, 0);
+    assert.equal(client.operations.get(target.id.uri), undefined);
     assert.equal(client.getActiveRequests().size, 0);
     debug.activeDebugSession = undefined;
     const nativeEvents = [];
@@ -202,7 +202,7 @@ test('client connects task notifications to the request window and sends cancell
         return new Promise(resolve => token.onCancellationRequested(() => resolve({ statusCode: 3 })));
     };
     const nativeRequest = client.test(testTarget, { native: true, token: nativeCancellation.token, selection: { dataKind: 'custom-selection', data: { ids: ['case-1'] } } });
-    await assert.rejects(client.test(testTarget, { native: true }), /already running/);
+    await assert.rejects(client.test(testTarget, { native: true }), /Wait for the current operation/);
     nativeCancellation.cancel();
     assert.equal((await nativeRequest).statusCode, 3);
     assert.deepEqual(nativeEvents.map(event => event.kind), ['started', 'finished']);
@@ -211,7 +211,7 @@ test('client connects task notifications to the request window and sends cancell
     assert.equal(client.getActiveRequests().size, 0);
     client.connection.sendRequest = () => assert.fail('Cancelled tests must not reach the server');
     await client.test(testTarget, { native: true, token: nativeCancellation.token });
-    assert.equal(client.testRequests.size, 0);
+    assert.equal(client.operations.get(testTarget.id.uri), undefined);
     nativeSubscription.dispose();
     nativeCancellation.dispose();
 
