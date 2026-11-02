@@ -80,24 +80,34 @@ Run `npm run test:protocol` to check progress, cancellation, diagnostics, and ou
 ### Testing panel
 
 The native VS Code **Testing** panel lists test targets from connected BSP servers.
-Use **Run Target** to run a target, or run all targets from the panel toolbar.
+Use **Run Tests** to run a target, or run all targets from the panel toolbar.
 The existing **BSP: Test Target** command also publishes results to this panel.
-Configuration and destination selections still come from the Build Targets view.
+Configuration and destination selections come from the Build Targets view.
+The Stop button cancels the corresponding BSP request.
 
-Test cases appear as the server sends standard `test-start` and `test-finish`
-payloads. Failures show their messages, and test output is available in Test Results
-and **Output → vscode-bsp-log**. The Stop button cancels the corresponding BSP
-request. A disconnected server ends its active runs with an error.
+With an updated sourcekit-bsp, the Swift discovery adapter finds XCTest and Swift
+Testing functions before execution. Open a test file and use the play button
+beside a test or suite. The same tests appear under their target in the Testing
+panel. You can select cases or exclude cases from a run. Results update the
+existing nodes; failures include messages and links to their source.
 
-Targets can run independently across servers. Case nodes currently show results;
-they do not support individual execution or exclusions. Run their containing
-target instead. The client does not derive executable selectors from display names
-or parse build-tool-specific logs. Source locations appear when the server supplies
-the standard `location` field.
+The adapter uses SourceKit-LSP from the server's advertised toolchain. It runs a
+separate discovery session with background indexing disabled, without access to
+private Swift extension APIs. It requires SourceKit-LSP test discovery version 2
+and one `.bsp/*.json` configuration per workspace folder. Source edits refresh
+locations automatically; the Testing panel's Refresh action retries discovery.
+Selected source files are saved before execution.
 
-With sourcekit-bsp, case results arrive after each target completes. Test discovery
-before execution, stable case identifiers, case selection, and live case events
-require further server support. No test debugging profile is advertised yet.
+Other BSP servers retain target execution and standard `test-start`,
+`test-finish`, and `test-report` display. Discovery adapters supply identifiers,
+locations, and selection data through `TestDiscovery`; the Testing controller does
+not parse Swift or Xcode logs. Display names alone never make a case runnable.
+
+With sourcekit-bsp, case results arrive after each target completes. Parameterized
+tests run as a whole function; individual arguments and test debugging are not
+supported. Output is available in Test Results and **Output → vscode-bsp-log**.
+See the server's [test selection contract](https://github.com/aelam/sourcekit-bsp/blob/main/Docs/wiki/Build-Run-Test-Debug.md#test-discovery-and-selection)
+for the optional metadata and payloads.
 
 ### Activation
 
@@ -203,6 +213,7 @@ This extension implements BSP Protocol version 2.1.0 and supports:
 - ✅ `build/shutdown` - Graceful shutdown
 - ✅ `build/exit` - Server termination
 - ✅ `workspace/buildTargets` - Build target discovery
+- ✅ `buildTarget/sources` - Source ownership for test discovery
 - ✅ `buildTarget/compile` - Target compilation
 - ✅ `buildTarget/test` - Test execution
 - ✅ `buildTarget/run` - Target execution

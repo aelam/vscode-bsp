@@ -33,6 +33,7 @@ import {
     TaskProgressParams,
     TaskFinishParams,
     BuildServerCapabilities,
+    SourcesItem,
     OutputPathItem,
     OutputPathsResult
 } from './bspTypes';
@@ -183,6 +184,14 @@ export class BspClient {
         }
     }
 
+    async getSources(targets: BuildTarget[], token?: CancellationToken): Promise<SourcesItem[]> {
+        if (!this.connection) { throw new Error('BSP client not connected'); }
+        const result = await this.connection.sendRequest<{ items: SourcesItem[] }>(
+            'buildTarget/sources', { targets: targets.map(target => target.id) }, token ?? CancellationToken.None
+        );
+        return result.items;
+    }
+
     async getOutputPaths(target: BuildTarget): Promise<OutputPathItem[]> {
         if (!this.connection) { throw new Error('BSP client not connected'); }
         if (!this.serverCapabilities.outputPathsProvider) {
@@ -279,7 +288,7 @@ export class BspClient {
                         status = StatusCode.Cancelled;
                         return { statusCode: status, originId };
                     }
-                    const params: TestParams = { targets: [target.id], originId, arguments: testArgs };
+                    const params: TestParams = { targets: [target.id], originId, arguments: testArgs, ...options.selection };
                     log(`Starting tests for ${target.displayName || targetId}`);
                     const result: TestResult = await this.connection.sendRequest('buildTarget/test', params, cancellation);
                     status = result.statusCode;

@@ -197,9 +197,11 @@ test('client connects task notifications to the request window and sends cancell
     const testTarget = { id: { uri: 'target://tests' }, capabilities: { canTest: true } };
     client.connection.sendRequest = async (method, params, token) => {
         assert.equal(method, 'buildTarget/test');
+        assert.equal(params.dataKind, 'custom-selection');
+        assert.deepEqual(params.data, { ids: ['case-1'] });
         return new Promise(resolve => token.onCancellationRequested(() => resolve({ statusCode: 3 })));
     };
-    const nativeRequest = client.test(testTarget, { native: true, token: nativeCancellation.token });
+    const nativeRequest = client.test(testTarget, { native: true, token: nativeCancellation.token, selection: { dataKind: 'custom-selection', data: { ids: ['case-1'] } } });
     await assert.rejects(client.test(testTarget, { native: true }), /already running/);
     nativeCancellation.cancel();
     assert.equal((await nativeRequest).statusCode, 3);

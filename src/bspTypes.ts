@@ -48,7 +48,14 @@ export interface CompileResult {
     data?: any;
 }
 
+export interface SourcesItem {
+    target: BuildTargetIdentifier;
+    sources: { uri: string; kind: number; generated: boolean }[];
+}
+
 export interface TestParams {
+    dataKind?: string;
+    data?: unknown;
     targets: BuildTargetIdentifier[];
     originId?: string;
     arguments?: string[];
