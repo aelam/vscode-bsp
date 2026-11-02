@@ -22,6 +22,8 @@ export class MultiBspProvider implements vscode.TreeDataProvider<BspTreeItem> {
             this.refresh();
         });
         
+        this.connectionManager.onDidChangeOperations(() => this.refresh());
+
         // Listen to targets updates
         this.connectionManager.onDidUpdateTargets(() => {
             this.rebuildTargetMappings();
@@ -279,6 +281,25 @@ export class MultiBspProvider implements vscode.TreeDataProvider<BspTreeItem> {
     }
 
     getTreeItem(element: BspTreeItem): vscode.TreeItem {
+        const target = element.buildTarget;
+        const connection = element.connectionId ? this.connectionManager.getConnection(element.connectionId) : undefined;
+        if (!target || !connection?.connected) { return element; }
+        const operation = connection.client.operations.get(target.id.uri);
+        if (element.type === 'buildTarget' && !/loading|disconnected/.test(element.contextValue ?? '')) {
+            const favorite = /favorite/.test(element.contextValue ?? '') ? ' favorite' : '';
+            element.contextValue = this.getBuildTargetContextValue(target) + favorite;
+            element.description = this.getBuildTargetDescription(target);
+            element.iconPath = this.getBuildTargetIcon(target);
+            element.tooltip = this.getBuildTargetTooltip(target, connection.config.displayName);
+            if (operation) {
+                element.contextValue += operation.cancelling ? ' busy cancelling' : ' busy';
+                element.description = operation.message.replace(/\s+/g, ' ');
+                element.iconPath = new vscode.ThemeIcon('loading~spin');
+                element.tooltip += `\n${operation.message}`;
+            }
+        } else if (element.type === 'customSelector') {
+            element.contextValue = operation ? 'dynamicSelector busy' : 'dynamicSelector';
+        }
         return element;
     }
 

@@ -135,7 +135,7 @@ export class BuildSystemManager {
     /**
      * Show dynamic selector based on configuration
      */
-    async showDynamicSelector(target: BuildTarget, selectorConfig: any): Promise<void> {
+    async showDynamicSelector(target: BuildTarget, selectorConfig: any, canChange: () => boolean = () => true): Promise<void> {
         if (!selectorConfig.values || selectorConfig.values.length === 0) {
             vscode.window.showWarningMessage('No options available for this selector');
             return;
@@ -170,7 +170,7 @@ export class BuildSystemManager {
             matchOnDetail: true
         });
 
-        if (selected && selected.option) {
+        if (selected && selected.option && canChange()) {
             await this.handleDynamicSelection(target, selectorConfig.keyName, selected.option);
         }
     }

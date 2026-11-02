@@ -22,6 +22,12 @@ export interface BspConnection {
 
 export class BspConnectionManager {
     private connections = new Map<string, BspConnection>();
+    private backgroundSubscriptions = new Map<string, vscode.Disposable>();
+    private _onDidChangeBackgroundTasks = new vscode.EventEmitter<void>();
+    readonly onDidChangeBackgroundTasks = this._onDidChangeBackgroundTasks.event;
+    private operationSubscriptions = new Map<string, vscode.Disposable>();
+    private _onDidChangeOperations = new vscode.EventEmitter<void>();
+    readonly onDidChangeOperations = this._onDidChangeOperations.event;
     private _onDidChangeConnections = new vscode.EventEmitter<void>();
     readonly onDidChangeConnections = this._onDidChangeConnections.event;
     private _onDidUpdateTargets = new vscode.EventEmitter<string>(); // connectionId
@@ -80,6 +86,8 @@ export class BspConnectionManager {
         };
         
         this.connections.set(connectionId, connection);
+        this.operationSubscriptions.set(connectionId, client.operations.onDidChange(() => this._onDidChangeOperations.fire()));
+        this.backgroundSubscriptions.set(connectionId, client.backgroundTasks.onDidChange(() => this._onDidChangeBackgroundTasks.fire()));
         this.updateDisplayNames();
         this._onDidChangeConnections.fire();
         
@@ -159,6 +167,10 @@ export class BspConnectionManager {
         if (connection) {
             await this.disconnectFromServer(connectionId);
             this.connections.delete(connectionId);
+            this.operationSubscriptions.get(connectionId)?.dispose();
+            this.operationSubscriptions.delete(connectionId);
+            this.backgroundSubscriptions.get(connectionId)?.dispose();
+            this.backgroundSubscriptions.delete(connectionId);
             this.updateDisplayNames();
             this._onDidChangeConnections.fire();
             

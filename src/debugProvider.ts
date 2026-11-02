@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { TargetBusyError } from './bspTargetOperations';
 
 type PrepareDebug = (
     folder: vscode.WorkspaceFolder | undefined,
@@ -22,7 +23,11 @@ export class BspDebugConfigurationProvider implements vscode.DebugConfigurationP
         if (config.request === 'attach') {
             throw new Error('BSP Attach needs a live DAP address. Use BSP Debug to request one from the build server.');
         }
-        const resolved = await this.prepare(folder, token);
+        const resolved = await this.prepare(folder, token).catch(error => {
+            if (!(error instanceof TargetBusyError)) { throw error; }
+            void vscode.window.showInformationMessage(error.message);
+            return undefined;
+        });
         if (!resolved || token?.isCancellationRequested) { return null; }
         return { ...config, ...resolved, name: config.name };
     }
