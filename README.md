@@ -13,6 +13,25 @@ A VSCode extension that provides Build Server Protocol (BSP) client functionalit
 - 📈 **Dependency Visualization**: View build target dependencies
 - 🔄 **Real-time Updates**: Live updates from BSP server notifications
 
+### Debugging with F5
+
+Choose **BSP Debug** in Run and Debug, then press F5. The client selects a build
+target and requests a new debug session using the selected build settings. The
+server supplies the DAP address and attach or launch parameters. No fixed port
+is needed in `launch.json`:
+
+```json
+{
+  "version": "0.2.0",
+  "configurations": [
+    { "name": "BSP Debug", "type": "bsp-debug", "request": "launch", "stopOnEntry": true }
+  ]
+}
+```
+
+The target's **Debug** action uses the same server request. A manual **Attach**
+configuration is only for a live DAP endpoint whose address you already know.
+
 ## Setup
 
 ### Prerequisites

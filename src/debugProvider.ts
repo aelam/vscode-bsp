@@ -1,74 +1,47 @@
 import * as vscode from 'vscode';
 
+type PrepareDebug = (
+    folder: vscode.WorkspaceFolder | undefined,
+    token: vscode.CancellationToken | undefined
+) => Promise<vscode.DebugConfiguration | undefined>;
+
 export class BspDebugConfigurationProvider implements vscode.DebugConfigurationProvider {
-    
-    /**
-     * Massage a debug configuration just before a debug session is being launched,
-     * e.g. add all missing attributes to the debug configuration.
-     */
-    resolveDebugConfiguration(
-        _folder: vscode.WorkspaceFolder | undefined,
+    constructor(private prepare: PrepareDebug) {}
+
+    async resolveDebugConfiguration(
+        folder: vscode.WorkspaceFolder | undefined,
         config: vscode.DebugConfiguration,
-        _token?: vscode.CancellationToken
-    ): vscode.ProviderResult<vscode.DebugConfiguration> {
-        // Configurations are normally supplied programmatically by the BSP
-        // client (from the server's debugSession/start response), carrying a
-        // `connect` endpoint plus either `pid` (attach) or `program` (launch).
-        // Only fill in essentials; do NOT require `program` — attach uses `pid`.
+        token?: vscode.CancellationToken
+    ): Promise<vscode.DebugConfiguration | null> {
+        if (token?.isCancellationRequested) { return null; }
         if (!config.type) { config.type = 'bsp-debug'; }
-        if (!config.request) { config.request = 'attach'; }
+        if (!config.request) { config.request = 'launch'; }
         if (!config.name) { config.name = 'BSP Debug'; }
-        return config;
+        // Configurations from the target toolbar already contain a DAP endpoint.
+        if (config.connect) { return config; }
+        if (config.request === 'attach') {
+            throw new Error('BSP Attach needs a live DAP address. Use BSP Debug to request one from the build server.');
+        }
+        const resolved = await this.prepare(folder, token);
+        if (!resolved || token?.isCancellationRequested) { return null; }
+        return { ...config, ...resolved, name: config.name };
     }
 
-    /**
-     * Provide initial debug configurations
-     */
-    provideDebugConfigurations(
-        folder: vscode.WorkspaceFolder | undefined, 
-        token?: vscode.CancellationToken
-    ): vscode.ProviderResult<vscode.DebugConfiguration[]> {
-        
-        return [
-            {
-                name: 'BSP Debug',
-                request: 'launch',
-                type: 'bsp-debug',
-                stopOnEntry: true
-            },
-            {
-                name: 'BSP Attach',
-                request: 'attach',
-                type: 'bsp-debug',
-                connect: {
-                    host: 'localhost',
-                    port: 5005
-                }
-            }
-        ];
+    provideDebugConfigurations(): vscode.DebugConfiguration[] {
+        return [{ name: 'BSP Debug', request: 'launch', type: 'bsp-debug', stopOnEntry: true }];
     }
 }
 
 export class BspDebugAdapterDescriptorFactory implements vscode.DebugAdapterDescriptorFactory {
-    
-    createDebugAdapterDescriptor(
-        session: vscode.DebugSession, 
-        executable: vscode.DebugAdapterExecutable | undefined
-    ): vscode.ProviderResult<vscode.DebugAdapterDescriptor> {
-        
-        const config = session.configuration;
-        
-        if (config.connect) {
-            if (config.connect.host && config.connect.port) {
-                // Connect via TCP
-                return new vscode.DebugAdapterServer(config.connect.port, config.connect.host);
-            } else if (config.connect.socket) {
-                // Connect via Unix socket
-                return new vscode.DebugAdapterNamedPipeServer(config.connect.socket);
-            }
+    createDebugAdapterDescriptor(session: vscode.DebugSession): vscode.DebugAdapterDescriptor {
+        const connect = session.configuration.connect;
+        if (typeof connect?.socket === 'string' && connect.socket) {
+            return new vscode.DebugAdapterNamedPipeServer(connect.socket);
         }
-        
-        // Default: return undefined to use the default adapter
-        return undefined;
+        if (typeof connect?.host === 'string' && connect.host
+            && Number.isInteger(connect.port) && connect.port > 0 && connect.port <= 65535) {
+            return new vscode.DebugAdapterServer(connect.port, connect.host);
+        }
+        throw new Error('No valid BSP debug address. Start BSP Debug to request a new debug session.');
     }
 }
