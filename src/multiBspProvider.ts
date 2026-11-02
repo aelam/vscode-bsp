@@ -23,6 +23,7 @@ export class MultiBspProvider implements vscode.TreeDataProvider<BspTreeItem> {
         });
         
         this.connectionManager.onDidChangeOperations(() => this.refresh());
+        this.connectionManager.onDidChangeBackgroundTasks(() => this.refresh());
 
         // Listen to targets updates
         this.connectionManager.onDidUpdateTargets(() => {
@@ -288,11 +289,13 @@ export class MultiBspProvider implements vscode.TreeDataProvider<BspTreeItem> {
         if (element.type === 'buildTarget' && !/loading|disconnected/.test(element.contextValue ?? '')) {
             const favorite = /favorite/.test(element.contextValue ?? '') ? ' favorite' : '';
             element.contextValue = this.getBuildTargetContextValue(target) + favorite;
+            if (!connection.client.cleanCacheBlockedReason) { element.contextValue += ' canCleanCache'; }
             element.description = this.getBuildTargetDescription(target);
             element.iconPath = this.getBuildTargetIcon(target);
             element.tooltip = this.getBuildTargetTooltip(target, connection.config.displayName);
             if (operation) {
                 element.contextValue += operation.cancelling ? ' busy cancelling' : ' busy';
+                if (!operation.cancellable) { element.contextValue += ' nonCancellable'; }
                 element.description = operation.message.replace(/\s+/g, ' ');
                 element.iconPath = new vscode.ThemeIcon('loading~spin');
                 element.tooltip += `\n${operation.message}`;

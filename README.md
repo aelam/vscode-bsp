@@ -79,6 +79,22 @@ For sbt projects:
 
 ## Usage
 
+### Clean build cache
+
+Right-click a target and choose **Clean Build Cache…**, or run
+**BSP: Clean Build Cache…** from the Command Palette and select a target.
+Confirm the warning about shared caches before the request starts. The server
+decides what to remove; this may affect other targets in the project.
+
+Clean is unavailable while this connection has a pending operation or background
+task. While cleaning, all targets on this connection stay busy until the server
+responds. Clean has no cancel action because removing caches cannot be undone.
+The notification shows that cleaning is in progress, and the build output records
+the result. A failed or unsupported request reports an error.
+
+Tasks in other editors, tools, or BSP connections are not visible to this guard.
+Wait for those builds, tests, and indexing tasks to finish before cleaning.
+
 ### Progress and build output
 
 Background BSP tasks, including index preparation, appear in the status bar.
@@ -92,7 +108,8 @@ SourceKit-LSP's separate BSP connection are not visible to this client.
 While a target operation is pending, its buttons show a spinner, the current
 phase, and a cancel action. Build, test, run, and debug share one operation lock
 per target and connection. Cancellation keeps the lock until the request ends.
-Different targets and servers can still run operations at the same time.
+Different targets and servers can still run operations at the same time, except
+while Clean holds all targets on its connection.
 
 BSP task notifications update the progress notification. When a server supplies both
 `progress` and `total`, the client shows a percentage. Otherwise, it shows the stage
@@ -252,6 +269,7 @@ This extension implements BSP Protocol version 2.1.0 and supports:
 - ✅ `workspace/buildTargets` - Build target discovery
 - ✅ `buildTarget/sources` - Source ownership for test discovery
 - ✅ `buildTarget/compile` - Target compilation
+- ✅ `buildTarget/cleanCache` - Build cache cleanup
 - ✅ `buildTarget/test` - Test execution
 - ✅ `buildTarget/run` - Target execution
 - ✅ `debugSession/start` - Debug session initiation

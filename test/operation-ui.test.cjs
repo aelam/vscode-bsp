@@ -14,8 +14,9 @@ class Emitter {
     fire(value) { for (const listener of this.listeners) listener(value); }
     dispose() { this.listeners.clear(); }
 }
-const bars = [], notices = [];
+const bars = [], notices = [], warnings = [], errors = [], progressWindows = [], output = [];
 let startDebugging = async () => true;
+let confirm = async () => undefined;
 const vscode = {
     EventEmitter: Emitter,
     TreeItem: class { constructor(label) { this.label = label; } },
@@ -27,8 +28,12 @@ const vscode = {
     debug: { onDidStartDebugSession: () => ({ dispose() {} }), onDidTerminateDebugSession: () => ({ dispose() {} }),
         startDebugging: (...args) => startDebugging(...args) },
     window: {
-        withProgress: (_options, task) => task({ report() {} }, CancellationToken.None),
-        showInformationMessage: message => notices.push(message), showErrorMessage() {}, setStatusBarMessage() {},
+        withProgress: (options, task) => {
+            const reports = []; progressWindows.push({ options, reports });
+            return task({ report: update => reports.push(update) }, CancellationToken.None);
+        },
+        showWarningMessage: (...args) => { warnings.push(args); return confirm(...args); },
+        showInformationMessage: message => notices.push(message), showErrorMessage: message => errors.push(message), setStatusBarMessage() {},
         createStatusBarItem: () => {
             const bar = { visible: false, show() { this.visible=true; }, hide() { this.visible=false; }, dispose() { this.visible=false; } };
             bars.push(bar); return bar;
@@ -37,12 +42,15 @@ const vscode = {
 };
 const load = Module._load;
 Module._load = function(name, ...args) { return name === 'vscode' ? vscode : load.call(this, name, ...args); };
-let BspClient, MultiBspProvider, BspTreeItem, BspStatusBar, BspDebugConfigurationProvider;
+let BspClient, MultiBspProvider, BspTreeItem, BspStatusBar, BspDebugConfigurationProvider, cleanBuildCache;
 try {
     ({ BspClient } = require('../out/bspClient'));
     ({ MultiBspProvider, BspTreeItem } = require('../out/multiBspProvider'));
     ({ BspStatusBar } = require('../out/bspStatusBar'));
     ({ BspDebugConfigurationProvider } = require('../out/debugProvider'));
+    ({ cleanBuildCache } = require('../out/cleanCache'));
+    require('../out/logger').initializeBuildLogger({ info: message => output.push(message),
+        error: message => output.push(message), warn: message => output.push(message), show() {} });
 } finally { Module._load = load; }
 const target = (id='app') => ({ id: { uri: 'target://' + id }, displayName: id, tags: ['application'], languageIds: ['swift'], dependencies: [], capabilities: { canCompile: true, canTest: true, canRun: true, canDebug: true } });
 function client() {
@@ -179,4 +187,155 @@ test('simultaneous background tasks from different servers remain distinct and b
         assert.equal(a.backgroundTasks.active.length,0);
         req.resolve({statusCode:1});await pending;
     } finally { status.dispose(); }
+});
+
+test('clean uses standard params, locks every target, and reports the server result', async () => {
+    const c = client(), other = client(), t = target(), second = target('tests');
+    const pending = c.cleanCache(t);
+    assert.equal(c.requests.length, 1);
+    assert.equal(c.requests[0].method, 'buildTarget/cleanCache');
+    assert.deepEqual(c.requests[0].params, { targets: [t.id] });
+    assert.equal(progressWindows.at(-1).options.cancellable, false);
+    assert.equal(progressWindows.at(-1).options.title, 'BSP: Clean Build Cache');
+    assert.deepEqual(progressWindows.at(-1).reports, [{ message: 'Cleaning build cache' }]);
+    assert.equal(c.operations.get(second.id.uri), c.operations.get(t.id.uri));
+    for (const action of [() => c.cleanCache(second), () => c.compile(second), () => c.test(second, { native: true }),
+        () => c.run(second), () => c.debug(second), () => c.prepareDebugConfiguration(second), () => c.reload()]) {
+        await assert.rejects(action(), TargetBusyError);
+    }
+    c.operations.cancel(t.id.uri);
+    assert.equal(c.operations.get(t.id.uri).cancelling, false);
+    const independent = other.compile(t);
+    other.requests[0].resolve({ statusCode: 1 }); await independent;
+    c.requests[0].resolve({ cleaned: true, message: 'Removed shared caches' });
+    assert.equal((await pending).cleaned, true);
+    assert.equal(c.operations.get(second.id.uri), undefined);
+    assert.match(notices.at(-1), /Build cache cleaned/);
+    assert.match(output.at(-1), /Removed shared caches/);
+    const retry = c.compile(second); c.requests[1].resolve({ statusCode: 1 }); await retry;
+});
+
+test('clean rejects work on another target, including cancelled requests that have not settled', async () => {
+    const c = client(), t = target(), pending = c.compile(t);
+    await assert.rejects(c.cleanCache(target('tests')), TargetBusyError);
+    c.operations.cancel(t.id.uri);
+    await assert.rejects(c.cleanCache(target('tests')), TargetBusyError);
+    assert.equal(c.requests.length, 1);
+    c.requests[0].resolve({ statusCode: 3 }); await pending;
+    const clean = c.cleanCache(t); c.requests[1].resolve({ cleaned: true }); await clean;
+});
+
+test('background indexing hides Clean for all targets and restores it only when the root task ends', async () => {
+    const c = client(), m = manager([c]);
+    const provider = new MultiBspProvider(m, undefined, { onDidChangeConfiguration: () => ({ dispose() {} }), canHandle: () => false });
+    const item = new BspTreeItem('App', 1, 'buildTarget');
+    item.connectionId = 'server-0'; item.buildTarget = target(); item.contextValue = 'buildTarget favorite';
+    let updates = 0; provider.onDidChangeTreeData(() => updates++);
+    assert.match(provider.getTreeItem(item).contextValue, /canCleanCache/);
+    c.handlers.get('build/taskStart')({ taskId: { id: 'index' }, message: 'Prepare indexing' });
+    assert.ok(updates > 0);
+    assert.doesNotMatch(provider.getTreeItem(item).contextValue, /canCleanCache/);
+    await assert.rejects(c.cleanCache(target()), /Prepare indexing/);
+    c.handlers.get('build/taskStart')({ taskId: { id: 'child', parents: ['index'] } });
+    c.handlers.get('build/taskFinish')({ taskId: { id: 'child' }, status: 1 });
+    await assert.rejects(c.cleanCache(target()), TargetBusyError);
+    assert.equal(c.requests.length, 0);
+    c.handlers.get('build/taskFinish')({ taskId: { id: 'index' }, status: 1 });
+    assert.match(provider.getTreeItem(item).contextValue, /canCleanCache/);
+});
+
+test('clean needs confirmation, ignores duplicate dialogs, and rechecks operations after approval', async () => {
+    const c = client(), t = target(), choice = deferred();
+    confirm = () => choice.promise;
+    try {
+        const before = warnings.length, pending = cleanBuildCache(c, t);
+        await cleanBuildCache(c, target('tests'));
+        assert.equal(warnings.length, before + 1);
+        assert.equal(warnings.at(-1)[1].modal, true);
+        assert.match(warnings.at(-1)[1].detail, /other targets/);
+        assert.equal(c.requests.length, 0);
+        const compile = c.compile(target('tests'));
+        choice.resolve('Clean Build Cache'); await pending;
+        assert.equal(c.requests.length, 1);
+        assert.match(notices.at(-1), /Cannot clean/);
+        c.requests[0].resolve({ statusCode: 1 }); await compile;
+        confirm = async () => undefined;
+        await cleanBuildCache(c, t);
+        assert.equal(c.requests.length, 1);
+        confirm = async () => 'Clean Build Cache';
+        const retry = cleanBuildCache(c, t); await tick();
+        c.requests[1].resolve({ cleaned: true }); await retry;
+    } finally { confirm = async () => undefined; }
+});
+
+test('confirmation rechecks indexing and disconnects before it sends a clean request', async () => {
+    for (const duringDialog of ['index', 'disconnect']) {
+        const c = client(), choice = deferred(); confirm = () => choice.promise;
+        try {
+            const pending = cleanBuildCache(c, target());
+            if (duringDialog === 'index') {
+                c.handlers.get('build/taskStart')({ taskId: { id: 'index' }, message: 'Prepare indexing' });
+            } else { c.isConnected = false; c.clearTaskState(); }
+            choice.resolve('Clean Build Cache'); await pending;
+            assert.equal(c.requests.length, 0);
+            assert.match(notices.at(-1), duringDialog === 'index' ? /Cannot clean/ : /not connected/);
+        } finally { confirm = async () => undefined; c.clearTaskState(); }
+    }
+});
+
+test('false, invalid, unsupported, and rejected clean results report failure and release the lock', async () => {
+    for (const response of [
+        { result: { cleaned: false, message: 'Cache is in use' }, expected: /Cache is in use/ },
+        { result: { message: 'Done' }, expected: /Done/ },
+        { error: Object.assign(new Error('Method not found'), { code: -32601 }), expected: /does not support/ },
+        { error: new Error('Server disconnected'), expected: /Server disconnected/ }
+    ]) {
+        const c = client(), count = notices.length, pending = c.cleanCache(target());
+        if (response.error) { c.requests[0].reject(response.error); }
+        else { c.requests[0].resolve(response.result); }
+        await assert.rejects(pending, response.expected);
+        assert.match(errors.at(-1), response.expected);
+        assert.match(output.at(-1), /Clean failed/);
+        assert.equal(notices.length, count);
+        assert.equal(c.operations.get(target('tests').id.uri), undefined);
+        const retry = c.cleanCache(target()); c.requests[1].resolve({ cleaned: true }); await retry;
+    }
+});
+
+test('disconnect and a late clean response cannot release a new exclusive operation', async () => {
+    const ops = new BspTargetOperations(), old = deferred(), next = deferred();
+    const first = ops.run('app', 'clean', () => old.promise);
+    ops.clear();
+    const second = ops.run('tests', 'clean', () => next.promise);
+    old.resolve(); await first;
+    assert.equal(ops.get('another').kind, 'clean');
+    await assert.rejects(ops.run('another', 'compile', () => Promise.resolve()), TargetBusyError);
+    next.resolve(); await second;
+    assert.equal(ops.get('another'), undefined);
+});
+
+test('clean state appears on normal and favorite rows with no cancel action', async () => {
+    const c = client(), other = client(), m = manager([c, other]);
+    const provider = new MultiBspProvider(m, undefined, { onDidChangeConfiguration: () => ({ dispose() {} }), canHandle: () => false });
+    const make = (server, favorite) => {
+        const item = new BspTreeItem('Tests', 1, 'buildTarget');
+        item.connectionId = server; item.buildTarget = target('tests'); item.contextValue = 'buildTarget' + (favorite ? ' favorite' : '');
+        return item;
+    };
+    const pending = c.cleanCache(target());
+    for (const favorite of [false, true]) {
+        const row = provider.getTreeItem(make('server-0', favorite));
+        assert.match(row.contextValue, /busy nonCancellable/);
+        assert.doesNotMatch(row.contextValue, /canCleanCache/);
+        assert.equal(row.description, 'Cleaning build cache');
+    }
+    assert.match(provider.getTreeItem(make('server-1', false)).contextValue, /canCleanCache/);
+    const manifest = require('../package.json'), menus = manifest.contributes.menus['view/item/context'];
+    assert.equal(manifest.contributes.commands.find(c => c.command === 'bsp.cleanCache').title, 'Clean Build Cache…');
+    const cleanMenu = menus.find(m => m.command === 'bsp.cleanCache');
+    assert.doesNotMatch(cleanMenu.group, /inline/);
+    assert.match(cleanMenu.when, /canCleanCache/);
+    assert.match(menus.find(m => m.command === 'bsp.cancelOperation').when, /nonCancellable/);
+    c.requests[0].resolve({ cleaned: true }); await pending;
+    assert.match(provider.getTreeItem(make('server-0', true)).contextValue, /canCleanCache/);
 });

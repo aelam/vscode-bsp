@@ -12,7 +12,7 @@ import {
 } from 'vscode-jsonrpc/node';
 import { BspBackgroundTasks } from './bspBackgroundTasks';
 import { BspProgress, taskId } from './bspProgress';
-import { BspTargetOperations, TargetOperationKind } from './bspTargetOperations';
+import { BspTargetOperations, TargetBusyError, TargetOperationKind } from './bspTargetOperations';
 import { BspDebugSessions } from './bspDebugSessions';
 import { BspDiagnostics } from './bspDiagnostics';
 import { spawn, ChildProcess } from 'child_process';
@@ -22,6 +22,8 @@ import {
     WorkspaceBuildTargetsResult,
     CompileParams,
     CompileResult,
+    CleanCacheParams,
+    CleanCacheResult,
     TestParams,
     TestResult,
     RunParams,
@@ -205,6 +207,41 @@ export class BspClient {
         });
         const paths = result.items.filter(item => item.target.uri === target.id.uri).flatMap(item => item.outputPaths);
         return [...new Map(paths.map(path => [path.uri, path])).values()];
+    }
+
+    get cleanCacheBlockedReason(): string | undefined {
+        if (!this.connected) { return 'BSP server not connected'; }
+        const operation = this.operations.first;
+        if (operation) { return `Cannot clean while this server is busy: ${operation.message}`; }
+        const background = this.backgroundTasks.active[0];
+        if (background) { return `Cannot clean while this server is busy: ${background.message ?? background.title}`; }
+        return undefined;
+    }
+
+    async cleanCache(target: BuildTarget): Promise<CleanCacheResult> {
+        const blocked = this.cleanCacheBlockedReason;
+        if (blocked) { throw new TargetBusyError(blocked, false); }
+        return this.executeWithProgress('clean', target.id.uri, async () => {
+            const name = target.displayName || target.id.uri;
+            showBuildOutput();
+            buildLog(`Cleaning build cache for ${name}`);
+            try {
+                if (!this.connection) { throw new Error('BSP client not connected'); }
+                const params: CleanCacheParams = { targets: [target.id] };
+                const result = await this.connection.sendRequest<CleanCacheResult>('buildTarget/cleanCache', params);
+                if (result?.cleaned !== true) {
+                    throw new Error(result?.message || 'The build server did not clean the cache');
+                }
+                buildLog(`Build cache cleaned for ${name}${result.message ? `: ${result.message}` : ''}`);
+                void vscode.window.showInformationMessage(`Build cache cleaned for ${name}`);
+                return result;
+            } catch (error) {
+                const failure = (error as { code?: number })?.code === -32601
+                    ? new Error('This BSP server does not support buildTarget/cleanCache') : error;
+                buildLog(`Clean failed: ${failure instanceof Error ? failure.message : String(failure)}`, 1);
+                throw failure;
+            }
+        });
     }
 
     reload(): Promise<void> {
@@ -745,8 +782,8 @@ export class BspClient {
             if (options.native) { return execute({ report() {} }, options.token ?? CancellationToken.None); }
             return vscode.window.withProgress({
                 location: vscode.ProgressLocation.Notification,
-                title: `BSP ${kind}`,
-                cancellable: true
+                title: kind === 'clean' ? 'BSP: Clean Build Cache' : `BSP ${kind}`,
+                cancellable: operation.cancellable
             }, execute);
         });
     }

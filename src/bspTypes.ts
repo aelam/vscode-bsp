@@ -48,6 +48,15 @@ export interface CompileResult {
     data?: any;
 }
 
+export interface CleanCacheParams {
+    targets: BuildTargetIdentifier[];
+}
+
+export interface CleanCacheResult {
+    cleaned: boolean;
+    message?: string;
+}
+
 export interface SourcesItem {
     target: BuildTargetIdentifier;
     sources: { uri: string; kind: number; generated: boolean }[];

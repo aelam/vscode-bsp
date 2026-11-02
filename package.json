@@ -219,6 +219,12 @@
         "icon": "$(bug)"
       },
       {
+        "command": "bsp.cleanCache",
+        "title": "Clean Build Cache…",
+        "category": "BSP",
+        "icon": "$(clear-all)"
+      },
+      {
         "command": "bsp.revealBuildOutput",
         "title": "Reveal Build Output",
         "category": "BSP",
@@ -362,6 +368,11 @@
           "group": "build@5"
         },
         {
+          "command": "bsp.cleanCache",
+          "when": "view == bspTargets && viewItem =~ /buildTarget.*canCleanCache/ && !(viewItem =~ /disconnected|loading|busy/)",
+          "group": "build@6"
+        },
+        {
           "command": "bsp.compile",
           "when": "view == bspTargets && viewItem =~ /buildTarget.*canCompile/ && !(viewItem =~ /busy/)",
           "group": "inline@1"
@@ -433,7 +444,7 @@
         },
         {
           "command": "bsp.cancelOperation",
-          "when": "view == bspTargets && viewItem =~ /buildTarget.*busy/ && !(viewItem =~ /cancelling/)",
+          "when": "view == bspTargets && viewItem =~ /buildTarget.*busy/ && !(viewItem =~ /cancelling/) && !(viewItem =~ /nonCancellable/)",
           "group": "inline@1"
         }
       ]

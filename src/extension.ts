@@ -11,6 +11,7 @@ import { MultiBspProvider } from './multiBspProvider';
 import { BspDebugConfigurationProvider, BspDebugAdapterDescriptorFactory } from './debugProvider';
 import { BuildSystemManager } from './buildSystemManager';
 import { revealBuildOutput } from './outputPaths';
+import { cleanBuildCache } from './cleanCache';
 import { initializeBuildLogger, initializeLogger, showBuildOutput, log, logError, logInfo } from './logger';
 
 let bspClient: BspClient | undefined;
@@ -433,6 +434,18 @@ async function initializeBspExtension(context: vscode.ExtensionContext) {
         }
     });
 
+    const cleanCacheCommand = vscode.commands.registerCommand('bsp.cleanCache', async item => {
+        const selected = await getOrSelectBuildTarget(item);
+        if (!selected?.buildTarget) { return; }
+        const client = selected.connectionId
+            ? connectionManager?.getConnection(selected.connectionId)?.client : bspClient;
+        if (!client?.connected) {
+            void vscode.window.showErrorMessage('BSP server not connected');
+            return;
+        }
+        await cleanBuildCache(client, selected.buildTarget);
+    });
+
     const compileCommand = vscode.commands.registerCommand('bsp.compile', async (item) => {
         const selectedItem = await getOrSelectBuildTarget(item);
         if (!selectedItem) return;
@@ -608,6 +621,7 @@ async function initializeBspExtension(context: vscode.ExtensionContext) {
         connectServerCommand,
         disconnectServerCommand,
         compileCommand,
+        cleanCacheCommand,
         revealOutputCommand,
         testCommand,
         runCommand,
