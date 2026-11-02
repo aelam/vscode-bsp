@@ -1,22 +1,24 @@
 import * as vscode from 'vscode';
 
-let outputChannel: vscode.OutputChannel | undefined;
-let buildOutputChannel: vscode.OutputChannel | undefined;
+let outputChannel: vscode.LogOutputChannel | undefined;
+let buildOutputChannel: vscode.LogOutputChannel | undefined;
 
-export function initializeLogger(channel: vscode.OutputChannel) {
+export function initializeLogger(channel: vscode.LogOutputChannel) {
     outputChannel = channel;
 }
 
-/// A dedicated channel ("vscode-bsp-log") for build/compile output streamed
-/// from the server, kept separate from the general extension log.
-export function initializeBuildLogger(channel: vscode.OutputChannel) {
+// Keep server output separate from the extension's own log.
+export function initializeBuildLogger(channel: vscode.LogOutputChannel) {
     buildOutputChannel = channel;
 }
 
-/// Append a raw build line to the dedicated build channel (no timestamp so the
-/// output reads like real xcodebuild output).
-export function buildLog(message: string) {
-    buildOutputChannel?.appendLine(message);
+// BSP types 3 (Info) and 4 (Log) remain visible at the default log level.
+export function buildLog(message: string, type: number = 3) {
+    switch (type) {
+        case 1: buildOutputChannel?.error(message); break;
+        case 2: buildOutputChannel?.warn(message); break;
+        default: buildOutputChannel?.info(message);
+    }
 }
 
 export function showBuildOutput(preserveFocus: boolean = true) {
@@ -28,35 +30,25 @@ export function clearBuildOutput() {
 }
 
 export function log(message: string, showInConsole: boolean = true) {
-    const timestamp = new Date().toLocaleTimeString();
-    const fullMessage = `[${timestamp}] ${message}`;
-    
-    outputChannel?.appendLine(fullMessage);
-    
+    outputChannel?.info(message);
     if (showInConsole) {
-        console.log(fullMessage);
+        console.log(`[${new Date().toLocaleTimeString()}] ${message}`);
     }
 }
 
-export function logError(message: string, error?: any) {
-    const timestamp = new Date().toLocaleTimeString();
+export function logError(message: string, error?: unknown) {
     const errorMessage = error ? `${message}: ${error}` : message;
-    const fullMessage = `[${timestamp}] ERROR: ${errorMessage}`;
-    
-    outputChannel?.appendLine(fullMessage);
-    console.error(fullMessage);
+    outputChannel?.error(errorMessage);
+    console.error(`[${new Date().toLocaleTimeString()}] ERROR: ${errorMessage}`);
 }
 
 export function logInfo(message: string) {
-    log(`INFO: ${message}`);
+    log(message);
 }
 
 export function logWarning(message: string) {
-    const timestamp = new Date().toLocaleTimeString();
-    const fullMessage = `[${timestamp}] WARNING: ${message}`;
-    
-    outputChannel?.appendLine(fullMessage);
-    console.warn(fullMessage);
+    outputChannel?.warn(message);
+    console.warn(`[${new Date().toLocaleTimeString()}] WARNING: ${message}`);
 }
 
 export function showOutput() {

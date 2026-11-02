@@ -3,6 +3,7 @@ import { BuildTarget, StatusCode, TaskStartParams, TaskFinishParams, TaskProgres
 
 export interface BspTestOptions {
     native?: boolean;
+    selection?: { dataKind: string; data: unknown };
     token?: CancellationToken;
 }
 
@@ -12,5 +13,5 @@ export type BspTestEvent =
     | { kind: 'taskStart'; params: TaskStartParams }
     | { kind: 'taskFinish'; params: TaskFinishParams }
     | { kind: 'taskProgress'; params: TaskProgressParams }
-    | { kind: 'log'; params: { message: string; originId?: string } }
+    | { kind: 'log'; params: { message: string; originId?: string; type?: number } }
     | { kind: 'connected' | 'disconnected' | 'targets' };

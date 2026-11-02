@@ -7,6 +7,8 @@ import { BspTestRun } from './bspTestRun';
 import { BuildTarget, StatusCode, TaskStartParams } from './bspTypes';
 import { taskId } from './bspProgress';
 import { logError } from './logger';
+import { BspTestDiscovery } from './bspTestDiscovery';
+import type { TestDiscoveryFactory } from './testDiscovery';
 
 interface Target { item: vscode.TestItem; connectionId: string; client: BspClient; target: BuildTarget }
 interface Session {
@@ -22,20 +24,23 @@ export class BspTesting implements vscode.Disposable {
     private subscriptions: vscode.Disposable[] = [];
     private sessions = new Map<string, Session>();
     private taskOwners = new Map<string, string>();
-    private pending = new Map<string, vscode.TestRun>();
+    private pending = new Map<string, { run: vscode.TestRun; selected?: vscode.TestItem[] }>();
+    private discovery: BspTestDiscovery;
     private activeTargets = new Set<string>();
     private batches = new Set<vscode.TestRun>();
     private disposed = false;
     private legacy?: BspConnection;
 
-    constructor(private manager: BspConnectionManager, legacy?: BspClient) {
+    constructor(private manager: BspConnectionManager, legacy?: BspClient, factories: TestDiscoveryFactory[] = []) {
+        this.discovery = new BspTestDiscovery(this.controller, this.tag, factories,
+            id => this.activeTargets.has(id) || this.pending.has(id));
         if (legacy) {
             this.legacy = {
                 id: 'legacy', client: legacy, connected: false,
                 config: { name: 'BSP', displayName: 'BSP', configPath: '', workspaceUri: vscode.Uri.file('/') }
             };
         }
-        this.controller.createRunProfile('Run Target', vscode.TestRunProfileKind.Run,
+        this.controller.createRunProfile('Run Tests', vscode.TestRunProfileKind.Run,
             (request, token) => this.run(request, token), true, this.tag);
         this.controller.refreshHandler = token => this.refresh(token);
         this.controller.resolveHandler = item => item ? undefined : this.refresh();
@@ -80,7 +85,7 @@ export class BspTesting implements vscode.Disposable {
                 const item = this.targets.get(id)?.item
                     ?? this.controller.createTestItem(id, target.displayName ?? target.id.uri);
                 item.label = target.displayName ?? target.id.uri;
-                item.description = 'Run this target to load test results';
+                if (!this.discovery.catalog(item)) { item.description = 'Run this target to load test results'; }
                 item.tags = [this.tag];
                 this.targets.set(id, { item, connectionId: connection.id, client: connection.client, target });
                 keep.add(id);
@@ -90,6 +95,7 @@ export class BspTesting implements vscode.Disposable {
             this.controller.items.add(group);
         }
         for (const id of this.targets.keys()) { if (!keep.has(id)) { this.targets.delete(id); } }
+        this.discovery.sync(connections, [...this.targets.values()]);
     }
 
     private async loadTargets(client: BspClient): Promise<void> {
@@ -103,6 +109,7 @@ export class BspTesting implements vscode.Disposable {
             if (connection.client.connected) { await this.loadTargets(connection.client); }
         }
         this.sync();
+        await this.discovery.refresh(token);
     }
 
     private async run(request: vscode.TestRunRequest, token: vscode.CancellationToken): Promise<void> {
@@ -112,39 +119,71 @@ export class BspTesting implements vscode.Disposable {
         const cancellation = new CancellationTokenSource();
         const subscriptions = [token, run.token].map(t => t.onCancellationRequested(() => cancellation.cancel()));
         if (token.isCancellationRequested || run.token.isCancellationRequested) { cancellation.cancel(); }
-        const selected = new Map<string, Target>();
+        const selected = new Map<string, { entry: Target; items?: vscode.TestItem[] }>();
         const excludes = request.exclude ?? [];
-        const visit = (item: vscode.TestItem) => {
-            if (excludes.some(excluded => contains(excluded, item))) { return; }
-            const target = this.targets.get(item.id);
-            if (target) {
-                if (excludes.some(excluded => contains(item, excluded))) {
-                    run.errored(item, new vscode.TestMessage('This server cannot exclude individual tests. Select a whole target.'));
-                } else { selected.set(item.id, target); }
+        const excluded = (item: vscode.TestItem) => excludes.some(exclude => contains(exclude, item));
+        const selectCase = (item: vscode.TestItem) => {
+            if (excluded(item)) { return; }
+            const model = this.discovery.model(item);
+            if (model?.test.disabled) { run.skipped(item); return; }
+            if (model && item.children.size) {
+                for (const [, child] of item.children) { selectCase(child); }
                 return;
             }
-            if (item.parent && this.targets.has(item.parent.id)) {
+            const entry = model && this.targets.get(model.target.item.id);
+            if (!entry || !model.test.selector) {
                 run.errored(item, new vscode.TestMessage('Individual test selection is not available. Run the containing target.'));
                 return;
             }
+            const previous = selected.get(entry.item.id);
+            if (previous && !previous.items) { return; }
+            const items = previous?.items ?? [];
+            if (!items.includes(item)) { items.push(item); }
+            selected.set(entry.item.id, { entry, items });
+        };
+        const visit = (item: vscode.TestItem) => {
+            if (excluded(item)) { return; }
+            const entry = this.targets.get(item.id);
+            if (entry) {
+                if (excludes.some(exclude => contains(item, exclude))) {
+                    if (!this.discovery.catalog(item)) {
+                        run.errored(item, new vscode.TestMessage('This server cannot exclude individual tests. Select a whole target.'));
+                    } else { for (const [, child] of item.children) { selectCase(child); } }
+                } else { selected.set(item.id, { entry }); }
+                return;
+            }
+            if (this.discovery.model(item) || (item.parent && this.targets.has(item.parent.id))) { selectCase(item); return; }
             for (const [, child] of item.children) { visit(child); }
         };
         for (const item of request.include ?? [...this.controller.items].map(([, item]) => item)) { visit(item); }
-        for (const target of selected.values()) { run.enqueued(target.item); }
+        for (const { entry, items } of selected.values()) {
+            run.enqueued(entry.item);
+            items?.forEach(item => run.enqueued(item));
+        }
         try {
-            for (const entry of selected.values()) {
+            for (const { entry, items } of selected.values()) {
                 if (this.disposed) { break; }
-                if (cancellation.token.isCancellationRequested) { run.skipped(entry.item); continue; }
+                if (cancellation.token.isCancellationRequested) {
+                    run.skipped(entry.item); items?.forEach(item => run.skipped(item)); continue;
+                }
                 if (this.activeTargets.has(entry.item.id) || this.pending.has(entry.item.id)) {
                     run.errored(entry.item, new vscode.TestMessage('Tests for this target are already running'));
                     continue;
                 }
-                this.pending.set(entry.item.id, run);
+                this.pending.set(entry.item.id, { run, selected: items });
                 try {
-                    await entry.client.test(entry.target, { native: true, token: cancellation.token });
+                    const selection = items ? this.discovery.selection(entry, items) : undefined;
+                    const files = new Set(items?.map(item => item.uri?.toString()));
+                    for (const document of vscode.workspace?.textDocuments ?? []) {
+                        if (document.isDirty && (items ? files.has(document.uri.toString()) : true) && !await document.save()) {
+                            throw new Error('Save test files before running tests');
+                        }
+                    }
+                    await entry.client.test(entry.target, { native: true, token: cancellation.token, selection });
                 } catch (error) {
                     if (!this.disposed && !cancellation.token.isCancellationRequested && this.pending.has(entry.item.id)) {
                         run.errored(entry.item, new vscode.TestMessage(String(error)));
+                        items?.forEach(item => run.errored(item, new vscode.TestMessage(String(error))));
                     }
                 } finally { this.pending.delete(entry.item.id); }
             }
@@ -168,9 +207,11 @@ export class BspTesting implements vscode.Disposable {
             if (!entry) { return; }
             const prepared = this.pending.get(entry.item.id);
             this.pending.delete(entry.item.id);
-            const run = prepared ?? this.controller.createTestRun(new vscode.TestRunRequest([entry.item]), entry.item.label);
+            const run = prepared?.run ?? this.controller.createTestRun(new vscode.TestRunRequest([entry.item]), entry.item.label);
+            const catalog = this.discovery.catalog(entry.item);
             const session: Session = {
-                state: new BspTestRun(this.controller, run, entry.item, event.target.id.uri),
+                state: new BspTestRun(this.controller, run, entry.item, event.target.id.uri,
+                    catalog ? { items: new Map(catalog), selected: prepared?.selected } : undefined),
                 connectionId, owned: !prepared,
                 cancellation: run.token.onCancellationRequested(event.cancel), cancel: event.cancel
             };
@@ -181,7 +222,7 @@ export class BspTesting implements vscode.Disposable {
             this.finish(this.key(connectionId, event.originId), event.status, event.error);
         } else if (event.kind === 'log') {
             if (event.params.originId) {
-                this.sessions.get(this.key(connectionId, event.params.originId))?.state.output(event.params.message);
+                this.sessions.get(this.key(connectionId, event.params.originId))?.state.log(event.params.message, event.params.type);
             }
         } else if ('params' in event) {
             const owner = this.owner(connectionId, event.params);
@@ -190,7 +231,9 @@ export class BspTesting implements vscode.Disposable {
             this.taskOwners.set(this.key(connectionId, taskId(event.params.taskId)), owner!);
             if (event.kind === 'taskStart') { session.state.start(event.params); }
             if (event.kind === 'taskFinish') { session.state.finishTask(event.params); }
-            if (event.kind === 'taskProgress' && event.params.message) { session.state.output(event.params.message); }
+            if (event.kind === 'taskProgress' && event.params.message) {
+                session.state.output(event.params.message, session.state.target, 'progress');
+            }
         }
     }
 
@@ -217,6 +260,7 @@ export class BspTesting implements vscode.Disposable {
     }
 
     private disconnected(connectionId: string): void {
+        this.discovery.remove(connectionId);
         for (const [key, session] of this.sessions) {
             if (session.connectionId === connectionId) { this.finish(key, StatusCode.Error, 'BSP server disconnected'); }
         }
@@ -229,6 +273,7 @@ export class BspTesting implements vscode.Disposable {
         for (const session of this.sessions.values()) { session.cancel(); }
         for (const key of [...this.sessions.keys()]) { this.finish(key, StatusCode.Cancelled); }
         this.disposed = true;
+        this.discovery.dispose();
         this.subscriptions.forEach(s => s.dispose());
         this.listeners.forEach(s => s.dispose());
         this.batches.forEach(run => run.end());

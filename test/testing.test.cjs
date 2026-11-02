@@ -273,3 +273,97 @@ test('uses failure locations supplied only in test-finish', async () => {
     assert.equal(failure[2].location.uri.toString(), 'file:///Failed.swift');
     s.testing.dispose();
 });
+
+function discoverable() {
+    const change = emitter();
+    const leaf = (id, line) => ({ id, label: 'Same display name', uri: vscode.Uri.parse('file:///Tests.swift'),
+        range: new Range(line, 0, line + 2, 1), disabled: false, children: [], selector: { id } });
+    const provider = { onDidChange: change.event, disposed: false,
+        tests: [{ ...leaf('Suite', 1), selector: undefined, children: [leaf('Suite/first()', 3), leaf('Suite/second()', 8)] }],
+        async discover(targets) { return new Map(targets.map(t => [t.id.uri, this.tests])); },
+        selection(target, tests) { return { dataKind: 'fake-selection', data: { target: target.id, ids: tests.map(t => t.id) } }; },
+        dispose() { this.disposed = true; }
+    };
+    const c = client(), changes = emitter(), updates = emitter();
+    const connections = [{ id: 'server', client: c, connected: true, config: { name: 'Server' } }];
+    const manager = { getAllConnections: () => connections, onDidChangeConnections: changes.event, onDidUpdateTargets: updates.event };
+    const testing = new BspTesting(manager, undefined, [() => provider]);
+    const targetItem = () => [...testing.controller.items.values()][0].children.values().next().value;
+    const leaves = () => [...targetItem().children.values()][0].children;
+    return { testing, provider, c, connections, changes, updates, targetItem, leaves, controller: testing.controller };
+}
+
+test('discovery supplies gutter locations and single-case results update the existing node', async () => {
+    const s = discoverable(); await s.controller.refreshHandler(CancellationToken.None);
+    const leaves = [...s.leaves().values()], [first, second] = leaves;
+    assert.equal(first.uri.toString(), 'file:///Tests.swift'); assert.equal(first.range.start.line, 3);
+    assert.equal(first.tags.length, 1); assert.notEqual(first.id, second.id);
+    s.c.execute = async (origin, options) => {
+        assert.deepEqual(options.selection.data.ids, ['Suite/first()']);
+        start(s.c, origin); result(s.c, 'case', 'Different report name', 1, { testId: 'Suite/first()' }); report(s.c); return 1;
+    };
+    await s.controller.handler(request([first]), CancellationToken.None);
+    const run = s.controller.runs[0];
+    assert.ok(run.records.some(r => r[0] === 'passed' && r[1] === first));
+    assert.ok(!run.records.some(r => r[0] === 'passed' && r[1] === second));
+    assert.equal(first.range.start.line, 3); assert.equal(first.tags.length, 1);
+    assert.deepEqual([...s.leaves().values()], leaves, 'Partial results must not prune the discovery tree');
+    s.provider.tests[0].children[0].range = new Range(10, 0, 12, 1);
+    await s.controller.refreshHandler(CancellationToken.None);
+    assert.equal([...s.leaves().values()][0], first); assert.equal(first.range.start.line, 10);
+    s.testing.dispose(); assert.equal(s.provider.disposed, true);
+});
+
+test('suite selection and exclusions send only the remaining runnable cases', async () => {
+    const s = discoverable(); await s.controller.refreshHandler(CancellationToken.None);
+    const suite = [...s.targetItem().children.values()][0], [first, second] = [...s.leaves().values()];
+    await s.controller.handler(request([suite], [first]), CancellationToken.None);
+    assert.deepEqual(s.c.calls[0].options.selection.data.ids, ['Suite/second()']);
+    const run = s.controller.runs[0];
+    assert.ok(run.records.some(r => r[0] === 'errored' && r[1] === second && /No result/.test(r[2].message)));
+    assert.ok(!run.records.some(r => r[0] === 'passed' && r[1] === s.targetItem()));
+    s.provider.tests[0].children[1].disabled = true;
+    await s.controller.refreshHandler(CancellationToken.None);
+    await s.controller.handler(request([second]), CancellationToken.None);
+    assert.equal(s.c.calls.length, 1); assert.equal(second.tags.length, 0);
+    s.testing.dispose();
+});
+
+test('discovery cancellation and disconnect discard stale test lists', async () => {
+    const s = discoverable(); let release;
+    s.provider.discover = () => new Promise(resolve => { release = resolve; });
+    const refresh = s.controller.refreshHandler(CancellationToken.None); await tick();
+    s.c.connected = false; s.connections[0].connected = false; s.changes.fire();
+    release(new Map([[target().id.uri, s.provider.tests]])); await refresh;
+    assert.equal(s.controller.items.size, 0); assert.equal(s.provider.disposed, true);
+    s.testing.dispose();
+});
+
+test('selected tests with missing or unrelated results do not report success', async () => {
+    const s = discoverable(); await s.controller.refreshHandler(CancellationToken.None);
+    const [first] = [...s.leaves().values()];
+    s.c.execute = async origin => {
+        start(s.c, origin); result(s.c, 'case', 'Other', 1, { testId: 'Suite/second()' }); report(s.c); return 1;
+    };
+    await s.controller.handler(request([first]), CancellationToken.None);
+    const run = s.controller.runs[0];
+    assert.ok(run.records.some(r => r[0] === 'errored' && r[1] === first));
+    assert.ok(run.records.some(r => r[0] === 'errored' && r[1] === s.targetItem()));
+    s.testing.dispose();
+});
+
+test('merges suites across source files and removes deleted cases on discovery refresh', async () => {
+    const s = discoverable();
+    const suite = s.provider.tests[0];
+    s.provider.tests = [{ ...suite, children: [suite.children[0]] }, { ...suite, children: [suite.children[1]] }];
+    await s.controller.refreshHandler(CancellationToken.None);
+    assert.equal(s.targetItem().children.size, 1);
+    const [first, second] = [...s.leaves().values()];
+    assert.equal(s.leaves().size, 2);
+    s.provider.tests = [{ ...suite, children: [suite.children[0]] }];
+    await s.controller.refreshHandler(CancellationToken.None);
+    assert.deepEqual([...s.leaves().values()], [first]);
+    await s.controller.handler(request([second]), CancellationToken.None);
+    assert.equal(s.c.calls.length, 0);
+    s.testing.dispose();
+});

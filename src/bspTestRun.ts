@@ -1,9 +1,18 @@
 import * as vscode from 'vscode';
+import type { TestCatalog } from './testDiscovery';
 import { StatusCode, TaskFinishParams, TaskStartParams, TestStatus } from './bspTypes';
 import { taskId } from './bspProgress';
 import { testTaskMessage } from './bspTestReports';
 
 interface CaseState { item: vscode.TestItem; startTime?: number; finished: boolean }
+
+const outputStyles = {
+    passed: { color: 32, marker: '✓' },
+    failed: { color: 31, marker: '✗' },
+    warning: { color: 33, marker: '○' },
+    progress: { color: 36, marker: '▶' }
+};
+type OutputStyle = keyof typeof outputStyles;
 
 // One BSP request can contain nested tasks; only test payloads change test results.
 export class BspTestRun {
@@ -19,7 +28,8 @@ export class BspTestRun {
         private controller: vscode.TestController,
         readonly run: vscode.TestRun,
         readonly target: vscode.TestItem,
-        private targetUri: string
+        private targetUri: string,
+        private catalog?: TestCatalog
     ) { run.started(target); }
 
     start(params: TaskStartParams): void {
@@ -37,7 +47,10 @@ export class BspTestRun {
             const total = ['passed', 'failed', 'ignored', 'cancelled', 'skipped']
                 .reduce((sum, key) => sum + (data[key] as number), 0);
             this.report = { failed: data.failed as number, total, time: finiteTime(data.time) };
-            this.output(testTaskMessage(params)!);
+            const style: OutputStyle = params.status === StatusCode.Error || (data.failed as number) > 0 ? 'failed'
+                : params.status === StatusCode.Cancelled || (data.cancelled as number) > 0 || !(data.passed as number)
+                    ? 'warning' : 'passed';
+            this.output(testTaskMessage(params)!, this.target, style);
             return;
         }
         if (params.dataKind !== 'test-finish') { return; }
@@ -68,7 +81,10 @@ export class BspTestRun {
                 this.incomplete = true;
                 this.run.errored(state.item, new vscode.TestMessage('The server returned an unknown test status'));
         }
-        this.output(testTaskMessage(params) ?? 'Invalid test result', state.item);
+        const style: OutputStyle = data?.status === TestStatus.Passed ? 'passed'
+            : [TestStatus.Ignored, TestStatus.Skipped, TestStatus.Cancelled].includes(data?.status as TestStatus)
+                ? 'warning' : 'failed';
+        this.output(testTaskMessage(params) ?? 'Invalid test result', state.item, style);
     }
 
     finish(status: StatusCode, error?: string): void {
@@ -80,10 +96,17 @@ export class BspTestRun {
             if (status === StatusCode.Cancelled) { this.run.skipped(state.item); }
             else { this.run.errored(state.item, new vscode.TestMessage(error ?? 'No result was reported for this test')); }
         }
+        const completed = new Set([...this.cases.values()].map(state => state.item.id));
+        for (const item of this.catalog?.selected ?? []) {
+            if (completed.has(item.id)) { continue; }
+            this.incomplete = true;
+            if (status === StatusCode.Cancelled) { this.run.skipped(item); }
+            else { this.run.errored(item, new vscode.TestMessage(error ?? 'No result was reported for the selected test')); }
+        }
         const time = this.report?.time;
         if (status === StatusCode.Cancelled) {
             this.run.skipped(this.target);
-            this.output('Test run cancelled');
+            this.output('Test run cancelled', this.target, 'warning');
         } else if (this.failed || (this.report?.failed ?? 0) > 0) {
             this.run.failed(this.target, new vscode.TestMessage(error ?? 'One or more tests failed. See the test results.'), time);
         } else if (status !== StatusCode.Ok || this.incomplete) {
@@ -92,14 +115,22 @@ export class BspTestRun {
             this.run.passed(this.target, time);
         }
         // Replace cached cases only when a complete target report accounts for every result.
-        if (status !== StatusCode.Cancelled && !this.incomplete && this.report?.total === this.cases.size) {
+        if (!this.catalog && status !== StatusCode.Cancelled && !this.incomplete && this.report?.total === this.cases.size) {
             this.target.children.replace([...this.cases.values()].map(state => state.item));
         }
-        if (error) { this.output(error); }
+        if (error) { this.output(error, this.target, status === StatusCode.Cancelled ? 'warning' : 'failed'); }
     }
 
-    output(message: string, item: vscode.TestItem = this.target): void {
-        this.run.appendOutput(message.replace(/\r?\n/g, '\r\n') + '\r\n', undefined, item);
+    log(message: string, type?: number): void {
+        const prefix = type === 1 ? 'Error: ' : type === 2 ? 'Warning: ' : '';
+        this.output(prefix + message, this.target, type === 1 ? 'failed' : type === 2 ? 'warning' : undefined);
+    }
+
+    output(message: string, item: vscode.TestItem = this.target, style?: OutputStyle): void {
+        const text = message.replace(/\r?\n/g, '\r\n');
+        const decoration = style && outputStyles[style];
+        const output = decoration ? `\u001b[${decoration.color}m${decoration.marker} ${text}\u001b[0m` : text;
+        this.run.appendOutput(output + '\r\n', undefined, item);
     }
 
     private testCase(params: TaskStartParams): CaseState | undefined {
@@ -113,13 +144,19 @@ export class BspTestRun {
         const occurrence = this.occurrences.get(key) ?? 0;
         this.occurrences.set(key, occurrence + 1);
         const itemId = JSON.stringify([this.target.id, key, occurrence]);
-        const item = this.target.children.get(itemId)
+        const discovered = typeof data.testId === 'string' ? this.catalog?.items.get(data.testId) : undefined;
+        const item = discovered ?? this.target.children.get(itemId)
             ?? this.controller.createTestItem(itemId, data.displayName, location?.uri);
-        item.range = location?.range;
-        item.description = 'Result from the last target run';
-        // No run tag: a display name is not a portable executable test identifier.
-        item.tags = [];
-        this.target.children.add(item);
+        if (!discovered) {
+            item.range = location?.range;
+            item.description = 'Result from the last target run';
+            item.tags = [];
+            this.target.children.add(item);
+        }
+        if (this.catalog?.selected && !this.catalog.selected.some(selected => selected.id === item.id)) {
+            this.incomplete = true;
+            this.output('The server reported a test outside the selection', item, 'failed');
+        }
         this.run.enqueued(item);
         this.run.started(item);
         const state = { item, startTime: params.dataKind === 'test-start' ? finiteTime(params.eventTime) : undefined, finished: false };
@@ -145,7 +182,7 @@ function finiteTime(value: unknown): number | undefined {
     return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
-function testLocation(value: unknown): vscode.Location | undefined {
+export function testLocation(value: unknown): vscode.Location | undefined {
     const data = object(value), range = object(data?.range);
     const start = object(range?.start), end = object(range?.end);
     if (typeof data?.uri !== 'string' || !start || !end) { return undefined; }
