@@ -1,3 +1,5 @@
+import { BspTestEvent, BspTestOptions } from './bspTestEvents';
+import { testTaskMessage } from './bspTestReports';
 import * as vscode from 'vscode';
 import { 
     createMessageConnection, 
@@ -8,6 +10,7 @@ import {
     CancellationTokenSource
 } from 'vscode-jsonrpc/node';
 import { BspProgress, taskId } from './bspProgress';
+import { BspDebugSessions } from './bspDebugSessions';
 import { BspDiagnostics } from './bspDiagnostics';
 import { spawn, ChildProcess } from 'child_process';
 import { buildLog, log, logError, logInfo, showBuildOutput } from './logger';
@@ -56,9 +59,31 @@ export class BspClient {
     private diagnostics = new BspDiagnostics();
     private cancellations = new Map<string, CancellationTokenSource>();
     private onTargetsUpdated?: () => void;
+    private debugSessions: BspDebugSessions;
+    private launchRequests = new Set<string>();
+    private testListeners = new Set<(event: BspTestEvent) => void>();
+    private testRequests = new Set<string>();
+    private testOrigins = new Set<string>();
+    private testTasks = new Set<string>();
+
+    onTestEvent(listener: (event: BspTestEvent) => void): vscode.Disposable {
+        this.testListeners.add(listener);
+        return { dispose: () => { this.testListeners.delete(listener); } };
+    }
+
+    private emitTestEvent(event: BspTestEvent): void {
+        for (const listener of this.testListeners) {
+            try { listener(event); }
+            catch (error) { logError('Failed to update test results', error); }
+        }
+    }
+
+    get supportsTesting(): boolean { return this.serverCapabilities.testProvider !== undefined; }
+
 
     constructor(workspaceUri: vscode.Uri, private configPath?: string, onTargetsUpdated?: () => void, private buildSystemManager?: any) {
         this.workspaceUri = workspaceUri;
+        this.debugSessions = new BspDebugSessions(configPath ?? workspaceUri.fsPath);
         this.diagnosticsCollection = vscode.languages.createDiagnosticCollection('bsp');
         this.onTargetsUpdated = onTargetsUpdated;
         
@@ -94,6 +119,7 @@ export class BspClient {
             await this.initializeConnection();
 
             this.isConnected = true;
+            this.emitTestEvent({ kind: 'connected' });
             logInfo('✅ BSP client connected successfully');
         } catch (error) {
             logError('❌ Failed to connect BSP client', error);
@@ -142,6 +168,7 @@ export class BspClient {
             log('📦 BSP Client: Requesting build targets...');
             const result: WorkspaceBuildTargetsResult = await this.connection.sendRequest('workspace/buildTargets');
             this.buildTargets = result.targets;
+            this.emitTestEvent({ kind: 'targets' });
             log(`✅ BSP Client: Found ${this.buildTargets.length} build targets: ${this.buildTargets.map(t => t.displayName || t.id.uri).join(', ')}`);
             
             // Notify that targets have been updated
@@ -224,40 +251,60 @@ export class BspClient {
         });
     }
 
-    test(target: BuildTarget): Promise<TestResult> {
+    async test(target: BuildTarget, options: BspTestOptions = {}): Promise<TestResult> {
         const targetId = target.id.uri;
-        
-        return this.executeWithProgress('test', targetId, async (originId, cancellation) => {
-            if (!this.connection) {
-                throw new Error('BSP client not connected');
-            }
-
-            let testArgs: string[] = [];
-            
-            // Get test arguments from BuildSystemManager (if available)
-            if (this.buildSystemManager && this.buildSystemManager.canHandle(target)) {
+        if (!this.supportsTesting || !target.capabilities.canTest) {
+            throw new Error('This target does not support testing');
+        }
+        if (this.testRequests.has(targetId)) {
+            throw new Error('Tests for this target are already running');
+        }
+        this.testRequests.add(targetId);
+        try {
+            return await this.executeWithProgress('test', targetId, async (originId, cancellation) => {
+                this.testOrigins.add(originId);
+                this.emitTestEvent({
+                    kind: 'started', originId, target,
+                    cancel: () => this.cancellations.get(originId)?.cancel()
+                });
+                let status = StatusCode.Error;
+                let failure: string | undefined;
                 try {
-                    testArgs = await this.buildSystemManager.getTestArguments(target);
-                    log(`🔧 Generated test arguments: [${testArgs.join(', ')}]`);
+                    if (!this.connection) { throw new Error('BSP client not connected'); }
+                    let testArgs: string[] = [];
+                    if (this.buildSystemManager && this.buildSystemManager.canHandle(target)) {
+                        testArgs = await this.buildSystemManager.getTestArguments(target);
+                    }
+                    if (cancellation.isCancellationRequested) {
+                        status = StatusCode.Cancelled;
+                        return { statusCode: status, originId };
+                    }
+                    const params: TestParams = { targets: [target.id], originId, arguments: testArgs };
+                    log(`Starting tests for ${target.displayName || targetId}`);
+                    const result: TestResult = await this.connection.sendRequest('buildTarget/test', params, cancellation);
+                    status = result.statusCode;
+                    if (!options.native) { this.handleTestResult(result); }
+                    return result;
                 } catch (error) {
-                    logError('Failed to get test arguments from BuildSystemManager', error);
+                    failure = error instanceof Error ? error.message : String(error);
+                    throw error;
+                } finally {
+                    if (cancellation.isCancellationRequested) { status = StatusCode.Cancelled; }
+                    this.emitTestEvent({ kind: 'finished', originId, status, error: failure });
+                    this.testOrigins.delete(originId);
+                    if (!this.testOrigins.size) { this.testTasks.clear(); }
                 }
-            }
-
-            const params: TestParams = {
-                targets: [{ uri: targetId }],
-                originId,
-                arguments: testArgs
-            };
-
-            log(`🧪 Starting tests for ${target.displayName || targetId}`);
-            const result: TestResult = await this.connection.sendRequest('buildTarget/test', params, cancellation);
-            this.handleTestResult(result);
-            return result;
-        });
+            }, options);
+        } finally {
+            this.testRequests.delete(targetId);
+        }
     }
 
     run(target: BuildTarget): Promise<RunResult> {
+        return this.withLaunchLock(target.id.uri, () => this.runTarget(target));
+    }
+
+    private runTarget(target: BuildTarget): Promise<RunResult> {
         const targetId = target.id.uri;
         
         return this.executeWithProgress('run', targetId, async (originId, cancellation) => {
@@ -265,6 +312,8 @@ export class BspClient {
                 throw new Error('BSP client not connected');
             }
 
+            await this.stopPreviousDebugSession(targetId);
+            if (cancellation.isCancellationRequested) { throw new Error('Run cancelled'); }
             let runArgs: string[] = [];
             
             // Get run arguments from BuildSystemManager (if available)
@@ -290,12 +339,18 @@ export class BspClient {
         });
     }
 
-    async debug(target: BuildTarget): Promise<DebugSessionAddressResult> {
+    debug(target: BuildTarget): Promise<DebugSessionAddressResult> {
+        return this.withLaunchLock(target.id.uri, () => this.debugTarget(target));
+    }
+
+    private async debugTarget(target: BuildTarget): Promise<DebugSessionAddressResult> {
         const targetId = target.id.uri;
         
         if (!this.connection) {
             throw new Error('BSP client not connected');
         }
+
+        await this.stopPreviousDebugSession(targetId);
 
         // Send the same build arguments as run (configuration + destination) so
         // the debug build targets the selected simulator/device instead of
@@ -410,7 +465,10 @@ export class BspClient {
         const reader = new StreamMessageReader(this.serverProcess.stdout);
         const writer = new StreamMessageWriter(this.serverProcess.stdin);
         this.connection = createMessageConnection(reader, writer);
-        this.connection.onClose(() => this.clearTaskState());
+        this.connection.onClose(() => {
+            this.isConnected = false;
+            this.clearTaskState();
+        });
 
         // Set up notification handlers
         this.setupNotificationHandlers();
@@ -452,13 +510,22 @@ export class BspClient {
             return;
         }
 
+        this.connection.onNotification('buildTarget/didChange', () => {
+            void this.getBuildTargets().catch(error => logError('Failed to refresh changed targets', error));
+        });
+
         // Handle diagnostics
         this.connection.onNotification('build/publishDiagnostics', (params: PublishDiagnosticsParams) => {
             this.handleDiagnostics(params);
         });
 
         this.connection.onNotification('build/taskStart', (params: TaskStartParams) => {
-            showBuildOutput();
+            const parents = typeof params.taskId === 'string' ? [] : params.taskId.parents ?? [];
+            const isTest = this.testOrigins.has(params.originId ?? '') || parents.some(id => this.testTasks.has(id));
+            if (isTest) { this.testTasks.add(taskId(params.taskId)); }
+            this.emitTestEvent({ kind: 'taskStart', params });
+            params = { ...params, message: testTaskMessage(params) ?? params.message };
+            if (!isTest) { showBuildOutput(); }
             buildLog(`▶ ${params.message || 'Task started'}`);
             this.progress.start(params, () => {
                 let report = (_update: { message?: string; increment?: number }) => {};
@@ -485,6 +552,8 @@ export class BspClient {
         });
 
         this.connection.onNotification('build/taskFinish', (params: TaskFinishParams) => {
+            this.emitTestEvent({ kind: 'taskFinish', params });
+            params = { ...params, message: testTaskMessage(params) ?? params.message };
             this.progress.finish(params);
             const status = params.status === StatusCode.Ok ? '✓'
                 : params.status === StatusCode.Cancelled ? 'Cancelled:' : 'Failed:';
@@ -493,14 +562,16 @@ export class BspClient {
         });
 
         this.connection.onNotification('build/taskProgress', (params: TaskProgressParams) => {
+            this.emitTestEvent({ kind: 'taskProgress', params });
             this.progress.progress(params);
         });
 
         this.connection.onNotification('build/logMessage', (params: { type: number; message: string; originId?: string }) => {
+            this.emitTestEvent({ kind: 'log', params });
             const prefix = params.type === 1 ? 'Error: ' : params.type === 2 ? 'Warning: ' : '';
             buildLog(prefix + params.message);
             if (params.type === 1) {
-                showBuildOutput();
+                if (!this.testOrigins.has(params.originId ?? '')) { showBuildOutput(); }
                 logError(params.message);
             }
         });
@@ -670,6 +741,7 @@ export class BspClient {
             throw new Error('No workspace folder available');
         }
 
+        Object.assign(config, this.debugSessions.configuration(_targetId));
         log(`🐛 calling vscode.debug.startDebugging (folder=${workspaceFolder.uri.fsPath})`);
         const success = await vscode.debug.startDebugging(workspaceFolder, config);
         log(`🐛 startDebugging returned: ${success}`);
@@ -681,20 +753,19 @@ export class BspClient {
     private async executeWithProgress<T>(
         operation: string,
         targetId: string,
-        task: (originId: string, cancellation: CancellationToken) => Promise<T>
+        task: (originId: string, cancellation: CancellationToken) => Promise<T>,
+        options: BspTestOptions = {}
     ): Promise<T> {
         const originId = this.generateOriginId();
-        return vscode.window.withProgress({
-            location: vscode.ProgressLocation.Notification,
-            title: `BSP ${operation}`,
-            cancellable: true
-        }, async (progress, token) => {
+        const execute = async (progress: vscode.Progress<{ message?: string; increment?: number }>, token: vscode.CancellationToken) => {
             progress.report({ message: `${operation} ${targetId}...` });
             this.progress.register(originId, update => progress.report(update));
             const cancellation = new CancellationTokenSource();
             this.cancellations.set(originId, cancellation);
             const subscription = token.onCancellationRequested(() => cancellation.cancel());
-            if (token.isCancellationRequested) { cancellation.cancel(); }
+            const external = options.token && options.token !== token
+                ? options.token.onCancellationRequested(() => cancellation.cancel()) : undefined;
+            if (token.isCancellationRequested || options.token?.isCancellationRequested) { cancellation.cancel(); }
             const promise = task(originId, cancellation.token);
             this.activeRequests.set(originId, promise);
             log(`📤 ${operation} request started for ${targetId} (ID: ${originId})`);
@@ -703,21 +774,48 @@ export class BspClient {
             } catch (error: any) {
                 if (!cancellation.token.isCancellationRequested) {
                     logError(`Failed to ${operation} target`, error);
-                    vscode.window.showErrorMessage(`Failed to ${operation} ${targetId}: ${error.message}`);
+                    if (!options.native) { vscode.window.showErrorMessage(`Failed to ${operation} ${targetId}: ${error.message}`); }
                 }
                 throw error;
             } finally {
                 subscription.dispose();
+                external?.dispose();
                 cancellation.dispose();
                 this.cancellations.delete(originId);
                 this.activeRequests.delete(originId);
                 this.progress.unregister(originId);
                 log(`${operation} request finished for ${targetId}`);
             }
+        };
+        if (options.native) { return execute({ report() {} }, options.token ?? CancellationToken.None); }
+        return vscode.window.withProgress({
+            location: vscode.ProgressLocation.Notification,
+            title: `BSP ${operation}`,
+            cancellable: true
+        }, execute);
+    }
+
+    private async stopPreviousDebugSession(targetId: string): Promise<void> {
+        await this.debugSessions.stop(targetId, message => {
+            showBuildOutput();
+            buildLog(message);
+            log(message);
         });
     }
 
+    private async withLaunchLock<T>(targetId: string, operation: () => Promise<T>): Promise<T> {
+        if (this.launchRequests.has(targetId)) {
+            throw new Error('Run or Debug is already starting for this target. Wait for it to finish or cancel it.');
+        }
+        this.launchRequests.add(targetId);
+        try { return await operation(); }
+        finally { this.launchRequests.delete(targetId); }
+    }
+
     private clearTaskState(): void {
+        this.emitTestEvent({ kind: 'disconnected' });
+        this.testTasks.clear();
+        this.debugSessions.dispose();
         this.cancelAllRequests();
         this.progress.dispose();
         this.diagnostics.clear();

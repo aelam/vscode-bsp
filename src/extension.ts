@@ -1,3 +1,4 @@
+import { BspTesting } from './bspTesting';
 import * as vscode from 'vscode';
 import { BspClient } from './bspClient';
 import { BuildTargetProvider } from './buildTargetProvider';
@@ -183,6 +184,7 @@ export async function activate(context: vscode.ExtensionContext) {
 }
 
 async function initializeBspExtension(context: vscode.ExtensionContext) {
+    if (connectionManager) { return; }
     logInfo('Initializing BSP extension...');
     
     const workspaceFolders = vscode.workspace.workspaceFolders;
@@ -223,6 +225,7 @@ async function initializeBspExtension(context: vscode.ExtensionContext) {
     logInfo(`🔧 BuildSystemManager instance: ${buildSystemManager?.constructor?.name}`);
     bspClient = new BspClient(workspaceFolders[0].uri, undefined, undefined, buildSystemManager);
     buildTargetProvider = new BuildTargetProvider(bspClient);
+    context.subscriptions.push(new BspTesting(connectionManager, bspClient));
 
     // Register debug providers: the config provider fills defaults, the adapter
     // factory connects to the lldb-dap TCP endpoint the server returned.

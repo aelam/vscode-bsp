@@ -66,16 +66,28 @@ test('reset replaces only one target and duplicate shared diagnostics are merged
 test('client connects task notifications to the request window and sends cancellation', async () => {
     const Module = require('node:module');
     const originalLoad = Module._load;
-    const reports = [], errors = [];
+    const reports = [], errors = [], warnings = [], information = [];
     let cancel;
+    const debugStarted = new Set(), debugStopped = new Set();
+    const debug = {
+        activeDebugSession: undefined,
+        onDidStartDebugSession: listener => { debugStarted.add(listener); return { dispose: () => debugStarted.delete(listener) }; },
+        onDidTerminateDebugSession: listener => { debugStopped.add(listener); return { dispose: () => debugStopped.delete(listener) }; },
+        stopDebugging: async session => {
+            for (const listener of [...debugStopped]) { listener(session); }
+            if (debug.activeDebugSession === session) { debug.activeDebugSession = undefined; }
+        }
+    };
     const vscode = {
+        debug,
         languages: { createDiagnosticCollection: () => ({ clear() {}, set() {} }) },
         window: {
             withProgress: (_options, action) => action({ report: update => reports.push(update) }, {
                 isCancellationRequested: false,
                 onCancellationRequested: listener => { cancel = listener; return { dispose() {} }; }
             }),
-            showInformationMessage() {},
+            showInformationMessage: message => information.push(message),
+            showWarningMessage: message => warnings.push(message),
             showErrorMessage: message => errors.push(message),
             setStatusBarMessage() {}
         },
@@ -101,6 +113,13 @@ test('client connects task notifications to the request window and sends cancell
         }
     };
     client.setupNotificationHandlers();
+    handlers.get('build/showMessage')({ type: 1, message: 'Test error' });
+    handlers.get('build/showMessage')({ type: 2, message: 'Test warning' });
+    handlers.get('build/showMessage')({ type: 3, message: 'Test information' });
+    assert.deepEqual(errors.splice(0), ['Test error']);
+    assert.deepEqual(warnings, ['Test warning']);
+    assert.deepEqual(information, ['Test information']);
+
     const pending = client.compile({ id: { uri: 'target://app' }, displayName: 'App' });
     assert.equal(reports.find(value => value.message === 'Linking').increment, 50);
     cancel();
@@ -121,6 +140,82 @@ test('client connects task notifications to the request window and sends cancell
         ] };
     };
     assert.deepEqual(await client.getOutputPaths(target), [path]);
+
+    handlers.get('build/taskStart')({ taskId: { id: 'tests' }, message: 'Run tests' });
+    handlers.get('build/taskStart')({ taskId: { id: 'case', parents: ['tests'] }, dataKind: 'test-start', data: { displayName: 'example()' } });
+    handlers.get('build/taskFinish')({ taskId: { id: 'case', parents: ['tests'] }, status: 2, dataKind: 'test-finish', data: { displayName: 'example()', status: 2, message: 'Expected 1, got 2' } });
+    handlers.get('build/taskFinish')({ taskId: { id: 'tests' }, status: 2, dataKind: 'test-report', data: { target: { uri: 'target://tests' }, passed: 0, failed: 1, ignored: 0, cancelled: 0, skipped: 0, time: 1500 } });
+    assert.ok(reports.some(report => report.message === 'Test: example()'));
+    assert.ok(reports.some(report => report.message === 'example(): failed\nExpected 1, got 2'));
+    assert.ok(reports.some(report => /0 passed, 1 failed.*1.50s/.test(report.message)));
+
+    const sequence = [];
+    const configuration = client.debugSessions.configuration(target.id.uri);
+    const session = {
+        id: 'debug-hello', type: 'bsp-debug', name: 'Debug Hello', configuration,
+        customRequest: async (method, params) => {
+            assert.equal(method, 'disconnect');
+            assert.deepEqual(params, { terminateDebuggee: true });
+            sequence.push('disconnect');
+        }
+    };
+    debug.activeDebugSession = session;
+    for (const listener of debugStarted) { listener(session); }
+    client.connection.sendRequest = async (method, params) => {
+        assert.equal(method, 'buildTarget/run');
+        assert.equal(debug.activeDebugSession, undefined);
+        sequence.push('run');
+        handlers.get('build/taskStart')({ taskId: { id: 'run' }, originId: params.originId });
+        handlers.get('build/taskProgress')({ taskId: { id: 'run' }, message: 'Installing Hello' });
+        handlers.get('build/taskFinish')({ taskId: { id: 'run' }, status: 1, message: 'Run completed' });
+        return { statusCode: 1, originId: params.originId };
+    };
+    assert.equal((await client.run(target)).statusCode, 1);
+    assert.deepEqual(sequence, ['disconnect', 'run']);
+    assert.ok(reports.some(report => report.message === 'Installing Hello'));
+
+    let releaseRun;
+    client.connection.sendRequest = () => new Promise(resolve => { releaseRun = resolve; });
+    const firstRun = client.run(target);
+    await new Promise(resolve => setImmediate(resolve));
+    await assert.rejects(client.run(target), /already starting/);
+    await assert.rejects(client.debug(target), /already starting/);
+    releaseRun({ statusCode: 1 });
+    await firstRun;
+
+    session.customRequest = async () => { throw new Error('Cannot stop debugger'); };
+    debug.activeDebugSession = session;
+    client.connection.sendRequest = () => assert.fail('Must not run while stopping debug failed');
+    await assert.rejects(client.run(target), /Cannot stop debugger/);
+    assert.equal(client.launchRequests.size, 0);
+    assert.equal(client.getActiveRequests().size, 0);
+    debug.activeDebugSession = undefined;
+    const nativeEvents = [];
+    const nativeSubscription = client.onTestEvent(event => nativeEvents.push(event));
+    const nativeCancellation = new (require('vscode-jsonrpc/node').CancellationTokenSource)();
+    client.serverCapabilities.testProvider = { languageIds: ['swift'] };
+    const testTarget = { id: { uri: 'target://tests' }, capabilities: { canTest: true } };
+    client.connection.sendRequest = async (method, params, token) => {
+        assert.equal(method, 'buildTarget/test');
+        return new Promise(resolve => token.onCancellationRequested(() => resolve({ statusCode: 3 })));
+    };
+    const nativeRequest = client.test(testTarget, { native: true, token: nativeCancellation.token });
+    await assert.rejects(client.test(testTarget, { native: true }), /already running/);
+    nativeCancellation.cancel();
+    assert.equal((await nativeRequest).statusCode, 3);
+    assert.deepEqual(nativeEvents.map(event => event.kind), ['started', 'finished']);
+    assert.equal(nativeEvents[1].status, 3);
+    assert.equal(nativeEvents[0].originId, nativeEvents[1].originId);
+    assert.equal(client.getActiveRequests().size, 0);
+    client.connection.sendRequest = () => assert.fail('Cancelled tests must not reach the server');
+    await client.test(testTarget, { native: true, token: nativeCancellation.token });
+    assert.equal(client.testRequests.size, 0);
+    nativeSubscription.dispose();
+    nativeCancellation.dispose();
+
+    client.debugSessions.dispose();
+    assert.equal(debugStarted.size, 0);
+    assert.equal(debugStopped.size, 0);
 });
 
 test('reveals server output paths, supports selection, and handles missing products', async () => {
@@ -161,4 +256,16 @@ test('reveals server output paths, supports selection, and handles missing produ
     paths = [];
     await revealBuildOutput(client, target);
     assert.match(messages.at(-1), /no output paths/);
+});
+
+
+test('formats BSP test reports and rejects malformed payloads', () => {
+    const { testTaskMessage } = require('../out/bspTestReports');
+    const message = (dataKind, data) => testTaskMessage({ taskId: { id: 'test' }, dataKind, data });
+    assert.equal(message('test-finish', { displayName: 'skip', status: 5 }), 'skip: skipped');
+    assert.equal(message('test-finish', { displayName: 'cancel', status: 4 }), 'cancel: cancelled');
+    assert.equal(message('test-report', 'base64'), undefined);
+    assert.equal(message('test-report', { target: { uri: 'target://t' }, passed: -1 }), undefined);
+    assert.equal(message('test-finish', { displayName: 'unknown', status: 123 }), undefined);
+    assert.equal(message('custom', {}), undefined);
 });
