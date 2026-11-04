@@ -250,21 +250,27 @@
       },
       {
         "command": "bsp.disconnectAll",
-        "title": "Disconnect All BSP Servers",
+        "title": "Disconnect BSP Servers",
         "category": "BSP",
         "icon": "$(debug-disconnect)"
+      },
+      {
+        "command": "bsp.connectOrDiscover",
+        "title": "Connect BSP Servers",
+        "category": "BSP",
+        "icon": "$(plug)"
       },
       {
         "command": "bsp.connectServer",
         "title": "Connect to Server",
         "category": "BSP",
-        "icon": "$(debug-start)"
+        "icon": "$(plug)"
       },
       {
         "command": "bsp.disconnectServer",
         "title": "Disconnect from Server",
         "category": "BSP",
-        "icon": "$(debug-stop)"
+        "icon": "$(debug-disconnect)"
       },
       {
         "command": "bsp.compileDisabled",
@@ -353,18 +359,13 @@
           "group": "navigation"
         },
         {
-          "command": "bsp.discoverConnections",
-          "when": "view == bspTargets",
-          "group": "navigation"
-        },
-        {
-          "command": "bsp.connectAll",
-          "when": "view == bspTargets",
+          "command": "bsp.connectOrDiscover",
+          "when": "view == bspTargets && !bsp.connected",
           "group": "navigation"
         },
         {
           "command": "bsp.disconnectAll",
-          "when": "view == bspTargets",
+          "when": "view == bspTargets && bsp.connected",
           "group": "navigation"
         }
       ],

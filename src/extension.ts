@@ -28,6 +28,12 @@ function reportOperationError(error: unknown): void {
     }
 }
 
+function updateConnectionContext(): void {
+    const connected = !!bspClient?.connected
+        || !!connectionManager?.getAllConnections().some(connection => connection.connected);
+    void vscode.commands.executeCommand('setContext', 'bsp.connected', connected);
+}
+
 // Helper function to get or select a build target when item is not provided
 async function getOrSelectBuildTarget(item?: any, include: (target: BuildTarget) => boolean = () => true): Promise<any> {
     // If item is provided, return it
@@ -186,6 +192,7 @@ export async function activate(context: vscode.ExtensionContext) {
     // Initialize loggers
     initializeLogger(outputChannel);
     initializeBuildLogger(buildOutputChannel);
+    updateConnectionContext();
     
     // 强制断点用于调试测试
     log('🔥 BSP ACTIVATION START');
@@ -240,6 +247,7 @@ async function initializeBspExtension(context: vscode.ExtensionContext) {
 
     // Set context to enable BSP views
     vscode.commands.executeCommand('setContext', 'bsp.enabled', true);
+    updateConnectionContext();
     logInfo('BSP context enabled');
 
     // Initialize build system manager and connection manager
@@ -251,14 +259,14 @@ async function initializeBspExtension(context: vscode.ExtensionContext) {
     
     // Now create the real connection manager with the shared build system manager
     connectionManager = new BspConnectionManager(buildSystemManager);
+    context.subscriptions.push(connectionManager.onDidChangeConnections(() => updateConnectionContext()));
     
     // Replace the multiBspProvider with the correct connection manager, reusing the build system manager
     multiBspProvider = new MultiBspProvider(connectionManager, context, buildSystemManager);
 
     // Register multi-BSP tree data provider
     const multiBspTreeView = vscode.window.createTreeView('bspTargets', {
-        treeDataProvider: multiBspProvider,
-        showCollapseAll: true
+        treeDataProvider: multiBspProvider
     });
     context.subscriptions.push(multiBspTreeView);
     logInfo('Multi-BSP tree view registered');
@@ -354,6 +362,7 @@ async function initializeBspExtension(context: vscode.ExtensionContext) {
         
         try {
             await connectionManager.connectAll();
+            updateConnectionContext();
             vscode.window.showInformationMessage('Connected to all BSP servers');
         } catch (error) {
             vscode.window.showErrorMessage(`Failed to connect to some BSP servers: ${error}`);
@@ -364,7 +373,38 @@ async function initializeBspExtension(context: vscode.ExtensionContext) {
         if (!connectionManager) return;
         
         await connectionManager.disconnectAll();
+        updateConnectionContext();
         vscode.window.showInformationMessage('Disconnected from all BSP servers');
+    });
+
+    const connectOrDiscoverCommand = vscode.commands.registerCommand('bsp.connectOrDiscover', async () => {
+        if (!connectionManager) { return; }
+
+        let availableConnections = connectionManager.getAllConnections();
+        if (availableConnections.length === 0) {
+            const workspaceFolders = vscode.workspace.workspaceFolders;
+            if (!workspaceFolders) { return; }
+
+            const configs = await connectionManager.discoverWorkspaceConfigurations(workspaceFolders.map(folder => folder.uri));
+            for (const config of configs) {
+                await connectionManager.addConnection(config);
+            }
+            availableConnections = connectionManager.getAllConnections();
+        }
+
+        if (availableConnections.length === 0) {
+            vscode.window.showWarningMessage('No BSP configurations found in .bsp directory');
+            return;
+        }
+
+        await connectionManager.connectAll();
+        updateConnectionContext();
+        const connectedCount = connectionManager.getConnectedClients().length;
+        if (connectedCount > 0) {
+            vscode.window.showInformationMessage(`Connected to ${connectedCount} BSP server(s)`);
+        } else {
+            vscode.window.showWarningMessage('No BSP servers could be connected');
+        }
     });
 
     const connectServerCommand = vscode.commands.registerCommand('bsp.connectServer', async (item) => {
@@ -385,6 +425,7 @@ async function initializeBspExtension(context: vscode.ExtensionContext) {
         try {
             logInfo(`Connecting to server: ${item.connectionId}`);
             await connectionManager.connectToServer(item.connectionId);
+            updateConnectionContext();
             vscode.window.showInformationMessage(`Connected to BSP server`);
         } catch (error) {
             logError('Failed to connect to server', error);
@@ -410,6 +451,7 @@ async function initializeBspExtension(context: vscode.ExtensionContext) {
         try {
             logInfo(`Disconnecting from server: ${item.connectionId}`);
             await connectionManager.disconnectFromServer(item.connectionId);
+            updateConnectionContext();
             vscode.window.showInformationMessage(`Disconnected from BSP server`);
         } catch (error) {
             logError('Failed to disconnect from server', error);
@@ -620,6 +662,7 @@ async function initializeBspExtension(context: vscode.ExtensionContext) {
         try {
             logInfo(`Reconnecting to server: ${item.connectionId}`);
             await connectionManager.connectToServer(item.connectionId);
+            updateConnectionContext();
             vscode.window.showInformationMessage(`Reconnected to BSP server for favorite target`);
         } catch (error) {
             logError('Failed to reconnect to server', error);
@@ -634,6 +677,7 @@ async function initializeBspExtension(context: vscode.ExtensionContext) {
         discoverConnectionsCommand,
         connectAllCommand,
         disconnectAllCommand,
+        connectOrDiscoverCommand,
         connectServerCommand,
         disconnectServerCommand,
         compileCommand,
@@ -668,6 +712,7 @@ async function initializeBspExtension(context: vscode.ExtensionContext) {
             
             logInfo('Attempting to connect to all BSP servers...');
             await connectionManager.connectAll();
+            updateConnectionContext();
             
             const connectedClients = connectionManager.getConnectedClients();
             if (connectedClients.length > 0) {
@@ -679,11 +724,13 @@ async function initializeBspExtension(context: vscode.ExtensionContext) {
             // Fallback to single BSP client for backward compatibility
             logInfo('No multi-BSP configs found, trying single BSP connection...');
             await bspClient.connect();
+            updateConnectionContext();
             logInfo('BSP server connected, refreshing targets...');
             buildTargetProvider.refresh();
             vscode.window.showInformationMessage('BSP: Connected to server successfully!');
         }
     } catch (error) {
+        updateConnectionContext();
         logError('BSP connection error', error);
         vscode.window.showErrorMessage(`Failed to connect to BSP server: ${error}`);
     }
@@ -696,6 +743,7 @@ export function deactivate() {
     if (bspClient) {
         bspClient.disconnect();
     }
+    updateConnectionContext();
 }
 
 async function checkBspConfig(workspaceUri: vscode.Uri): Promise<boolean> {
