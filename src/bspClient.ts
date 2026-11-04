@@ -1,3 +1,4 @@
+import { BspStdio } from './bspStdio';
 import { BspTestEvent, BspTestOptions } from './bspTestEvents';
 import { testTaskMessage } from './bspTestReports';
 import * as vscode from 'vscode';
@@ -375,6 +376,8 @@ export class BspClient {
             };
 
             if (cancellation.isCancellationRequested) { throw new Error('Run cancelled'); }
+            showBuildOutput();
+            buildLog(`▶ Run: ${target.displayName || targetId}`);
             log(`🏃 Starting run for ${target.displayName || targetId}`);
             const result: RunResult = await this.connection.sendRequest('buildTarget/run', params, cancellation);
             this.handleRunResult(result);
@@ -538,7 +541,18 @@ export class BspClient {
         });
 
         // Create JSON-RPC connection
-        const reader = new StreamMessageReader(this.serverProcess.stdout);
+        const serverProcess = this.serverProcess;
+        const protocol = new BspStdio(message => buildLog(message));
+        protocol.on('error', error => {
+            logError('Invalid BSP stdout', error);
+            serverProcess.kill();
+        });
+        this.serverProcess.stdout.pipe(protocol);
+        const reader = new StreamMessageReader(protocol);
+        reader.onError(error => {
+            logError('Invalid BSP message', error);
+            serverProcess.kill();
+        });
         const writer = new StreamMessageWriter(this.serverProcess.stdin);
         this.connection = createMessageConnection(reader, writer);
         this.connection.onClose(() => {
@@ -727,6 +741,7 @@ export class BspClient {
 
     private handleRunResult(result: RunResult): void {
         if (result.statusCode === StatusCode.Cancelled) {
+            buildLog('Run cancelled');
             log('Task cancelled');
             return;
         }
@@ -734,6 +749,7 @@ export class BspClient {
         const message = result.statusCode === StatusCode.Ok 
             ? 'Run completed successfully' 
             : 'Run failed';
+        buildLog(message, result.statusCode === StatusCode.Ok ? 3 : 1);
         
         if (result.statusCode === StatusCode.Ok) {
             vscode.window.showInformationMessage(message);

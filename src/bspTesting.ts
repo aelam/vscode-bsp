@@ -3,7 +3,7 @@ import { CancellationTokenSource } from 'vscode-jsonrpc/node';
 import type { BspClient } from './bspClient';
 import type { BspConnection, BspConnectionManager } from './bspConnectionManager';
 import { BspTestEvent } from './bspTestEvents';
-import { BspTestRun } from './bspTestRun';
+import { BspTestRun, object } from './bspTestRun';
 import { BuildTarget, StatusCode, TaskStartParams } from './bspTypes';
 import { taskId } from './bspProgress';
 import { logError } from './logger';
@@ -245,7 +245,15 @@ export class BspTesting implements vscode.Disposable {
         const known = this.taskOwners.get(this.key(connectionId, taskId(params.taskId)));
         if (known) { return known; }
         const parents = typeof params.taskId === 'string' ? [] : params.taskId.parents ?? [];
-        return parents.map(parent => this.taskOwners.get(this.key(connectionId, parent))).find(owner => owner !== undefined);
+        const parent = parents.map(parent => this.taskOwners.get(this.key(connectionId, parent))).find(owner => owner !== undefined);
+        if (parent) { return parent; }
+        const target = ['test-task', 'test-report'].includes(params.dataKind ?? '')
+            ? object(object(params.data)?.target)?.uri : undefined;
+        if (typeof target !== 'string') { return undefined; }
+        // Some servers omit originId and identify the test request by its target.
+        const matches = [...this.sessions].filter(([, session]) => session.connectionId === connectionId
+            && session.state.targetUri === target);
+        return matches.length === 1 ? matches[0][0] : undefined;
     }
 
     private finish(key: string, status: StatusCode, error?: string): void {

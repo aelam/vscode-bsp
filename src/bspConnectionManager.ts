@@ -65,13 +65,26 @@ export class BspConnectionManager {
                 }
             }
         } catch (error) {
-            logError('Error discovering BSP configurations', error);
+            const code = (error as { code?: string })?.code;
+            if (code !== 'FileNotFound' && code !== 'ENOENT') {
+                logError('Error discovering BSP configurations', error);
+            }
         }
         
         return configs;
     }
 
+    async discoverWorkspaceConfigurations(workspaceUris: readonly vscode.Uri[]): Promise<BspConnectionConfig[]> {
+        const configs = await Promise.all(workspaceUris.map(uri => this.discoverBspConfigurations(uri)));
+        return configs.flat();
+    }
+
     async addConnection(config: BspConnectionConfig): Promise<string> {
+        const existing = this.getAllConnections().find(connection =>
+            connection.config.workspaceUri.toString() === config.workspaceUri.toString()
+            && path.resolve(connection.config.configPath) === path.resolve(config.configPath));
+        if (existing) { return existing.id; }
+
         const connectionId = `${config.name}_${randomUUID()}`;
         const client = new BspClient(config.workspaceUri, config.configPath, () => {
             // Notify when targets are updated for this connection
