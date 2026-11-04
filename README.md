@@ -55,7 +55,7 @@ Example `.bsp/example.json`:
 }
 ```
 
-For Bazel projects with bazel-bsp:
+For Bazel projects with [bazel-bsp](https://github.com/JetBrains/bazel-bsp):
 ```json
 {
   "name": "bazel-bsp",
@@ -66,7 +66,7 @@ For Bazel projects with bazel-bsp:
 }
 ```
 
-For sbt projects:
+For [sbt](https://github.com/sbt/sbt) projects:
 ```json
 {
   "name": "sbt",
@@ -79,7 +79,8 @@ For sbt projects:
 
 ## Usage
 
-For one folder with both SourceKit BSP and Mill BSP, see the
+For one folder with both [sourcekit-bsp](https://github.com/aelam/sourcekit-bsp)
+and [Mill BSP](https://github.com/com-lihaoyi/mill), see the
 [multi-BSP example](examples/multi-bsp/README.md). It includes an Xcode application,
 a Kotlin application, and tests for both.
 
@@ -271,12 +272,15 @@ vsce package
 ### Testing
 
 ```bash
-# Run tests
-npm test
-
-# Lint code
-npm run lint
+npm ci
+npm run test:protocol
 ```
+
+The CI workflow compiles TypeScript and runs the protocol tests on Linux and
+macOS with Node.js 24 for pull requests and pushes to `master`. These tests use
+VS Code API substitutes and do not require a running editor or build server.
+For checks with SourceKit BSP and Mill, see the
+[multi-BSP example](examples/multi-bsp/README.md#automated-check).
 
 ## BSP Protocol Support
 
