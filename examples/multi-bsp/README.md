@@ -23,9 +23,10 @@ multi-bsp/
 ```
 
 Open `multi-bsp`, which contains both projects. Both servers receive this folder
-as the workspace root. SourceKit BSP uses `Hello.xcworkspace` to find the project
-in `p1`. The Mill launcher changes its working directory to `p2` before starting
-Mill. Each server supplies its own build targets, actions, and test results.
+as the workspace root. [sourcekit-bsp](https://github.com/aelam/sourcekit-bsp)
+uses `Hello.xcworkspace` to find the project in `p1`. The
+[Mill](https://github.com/com-lihaoyi/mill) launcher changes its working directory
+to `p2` before starting Mill. Each server supplies its own build targets, actions, and test results.
 The client uses the standard BSP connection files without folder-routing rules.
 
 ## Setup
