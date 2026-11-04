@@ -367,3 +367,45 @@ test('merges suites across source files and removes deleted cases on discovery r
     assert.equal(s.c.calls.length, 0);
     s.testing.dispose();
 });
+
+
+test('routes originless target tasks and keeps named results that share a task ID', async () => {
+    const s = setup(), c = s.clients[0];
+    c.execute = async () => {
+        const taskId = { id: 'shared' };
+        c.emit({ kind: 'taskStart', params: { taskId, dataKind: 'test-task', data: { target: target().id } } });
+        for (const [displayName, status] of [['first', 1], ['second', 2]]) {
+            c.emit({ kind: 'taskStart', params: { taskId, eventTime: 100, dataKind: 'test-start', data: { displayName } } });
+            c.emit({ kind: 'taskFinish', params: { taskId, eventTime: 120, status: 1, dataKind: 'test-finish', data: { displayName, status, message: 'assertion failed' } } });
+        }
+        c.emit({ kind: 'taskFinish', params: { taskId, status: 2, dataKind: 'test-report', data: {
+            target: target().id, passed: 1, failed: 1, ignored: 0, cancelled: 0, skipped: 0
+        } } });
+        return 2;
+    };
+    await c.test(target());
+    const item = s.targets()[0], run = s.controller.runs[0];
+    assert.deepEqual([...item.children.values()].map(item => item.label), ['first', 'second']);
+    assert.ok(run.records.some(([method, item]) => method === 'passed' && item.label === 'first'));
+    assert.ok(run.records.some(([method, item]) => method === 'failed' && item.label === 'second'));
+    assert.ok(run.records.some(([method, result]) => method === 'failed' && result === item));
+    s.testing.dispose();
+});
+
+test('target fallback cannot override an explicit unrelated origin or another connection', async () => {
+    const s = setup([client(), client()]), [a, b] = s.clients;
+    a.execute = async originId => {
+        const params = { taskId: { id: 'unrelated' }, dataKind: 'test-task', data: { target: target().id } };
+        a.emit({ kind: 'taskStart', params: { ...params, originId: 'unknown' } });
+        b.emit({ kind: 'taskStart', params });
+        for (const c of [a, b]) {
+            c.emit({ kind: 'taskFinish', params: { taskId: params.taskId, dataKind: 'test-finish', data: { displayName: 'wrong', status: 2 } } });
+        }
+        start(a, originId); result(a, 'good', 'correct', 1); report(a);
+        return 1;
+    };
+    await a.test(target());
+    assert.deepEqual([...s.targets()[0].children.values()].map(item => item.label), ['correct']);
+    assert.equal(s.targets()[1].children.size, 0);
+    s.testing.dispose();
+});

@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { validateSourcekitBspConfig } from './sourcekitBspConfig';
 import { spawn, ChildProcessWithoutNullStreams } from 'child_process';
 import { promises as fs } from 'fs';
 import * as path from 'path';
@@ -113,10 +114,7 @@ class SourceKitTestDiscovery implements TestDiscovery {
         const toolchain = object(target.data)?.toolchain;
         if (typeof toolchain !== 'string') { throw new Error('The server did not provide a Swift toolchain for test discovery'); }
         const root = this.connection.config.workspaceUri.fsPath;
-        const configs = (await fs.readdir(path.join(root, '.bsp'))).filter(name => name.endsWith('.json'));
-        if (configs.length !== 1) {
-            throw new Error('Swift test discovery requires one .bsp configuration in this workspace folder');
-        }
+        await validateSourcekitBspConfig(root, this.connection.config.configPath);
         const executable = path.join(fileURLToPath(toolchain), 'usr/bin/sourcekit-lsp');
         const developer = path.resolve(fileURLToPath(toolchain), '../..');
         const child = spawn(executable, [], { cwd: root, env: { ...process.env, DEVELOPER_DIR: developer } });

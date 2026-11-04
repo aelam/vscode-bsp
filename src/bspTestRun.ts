@@ -28,7 +28,7 @@ export class BspTestRun {
         private controller: vscode.TestController,
         readonly run: vscode.TestRun,
         readonly target: vscode.TestItem,
-        private targetUri: string,
+        readonly targetUri: string,
         private catalog?: TestCatalog
     ) { run.started(target); }
 
@@ -134,11 +134,12 @@ export class BspTestRun {
     }
 
     private testCase(params: TaskStartParams): CaseState | undefined {
-        const id = taskId(params.taskId);
-        const existing = this.cases.get(id);
-        if (existing) { return existing; }
         const data = object(params.data);
         if (typeof data?.displayName !== 'string' || !data.displayName) { return undefined; }
+        // A server can report several named test results on the target's task.
+        const id = JSON.stringify([taskId(params.taskId), data.displayName]);
+        const existing = this.cases.get(id);
+        if (existing) { return existing; }
         const location = testLocation(data.location);
         const key = JSON.stringify([data.displayName, location?.uri.toString(), location?.range.start]);
         const occurrence = this.occurrences.get(key) ?? 0;

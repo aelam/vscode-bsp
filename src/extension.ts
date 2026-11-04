@@ -216,7 +216,7 @@ export async function activate(context: vscode.ExtensionContext) {
         return;
     }
 
-    const bspConfigExists = await checkBspConfig(workspaceFolders[0].uri);
+    const bspConfigExists = (await Promise.all(workspaceFolders.map(folder => checkBspConfig(folder.uri)))).some(Boolean);
     if (!bspConfigExists) {
         logInfo('No BSP configuration found');
         vscode.window.showInformationMessage('BSP: No .bsp configuration found. Use "BSP: Activate BSP Extension" command to force activation.');
@@ -336,7 +336,7 @@ async function initializeBspExtension(context: vscode.ExtensionContext) {
         const workspaceFolders = vscode.workspace.workspaceFolders;
         if (!workspaceFolders) return;
         
-        const configs = await connectionManager.discoverBspConfigurations(workspaceFolders[0].uri);
+        const configs = await connectionManager.discoverWorkspaceConfigurations(workspaceFolders.map(folder => folder.uri));
         
         for (const config of configs) {
             await connectionManager.addConnection(config);
@@ -657,7 +657,7 @@ async function initializeBspExtension(context: vscode.ExtensionContext) {
     // Auto-discover and connect to BSP servers
     try {
         logInfo('Auto-discovering BSP configurations...');
-        const configs = await connectionManager.discoverBspConfigurations(workspaceFolders[0].uri);
+        const configs = await connectionManager.discoverWorkspaceConfigurations(workspaceFolders.map(folder => folder.uri));
         
         if (configs.length > 0) {
             logInfo(`Found ${configs.length} BSP configuration(s), adding connections...`);

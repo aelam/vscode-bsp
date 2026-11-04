@@ -1,0 +1,16 @@
+package build
+import mill._, kotlinlib._
+
+object `package` extends RootModule with KotlinModule with TestModule.Junit5 {
+  def kotlinVersion = "2.2.20"
+  override def bspDisplayName = "hello-tests"
+  def moduleDeps = Seq(app)
+  def sources = Task.Sources(millSourcePath / "tests" / "src")
+  def resources = Task.Sources(millSourcePath / "tests" / "resources")
+  def ivyDeps = super.ivyDeps() ++ Agg(mvn"org.junit.jupiter:junit-jupiter:5.11.4")
+
+  object app extends KotlinModule {
+    def kotlinVersion = "2.2.20"
+    def mainClass = Some("example.HelloKt")
+  }
+}

@@ -1,0 +1,15 @@
+.bsp/
+.bsp-smoke/
+out/
+.bloop/
+.idea/
+.vscode/
+DerivedData/
+build/
+xcuserdata/
+*.xcuserstate
+*.xcresult/
+*.profraw
+p2/tests/resources/fail-test.txt
+.dist/
+.DS_Store

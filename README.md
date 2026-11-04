@@ -79,6 +79,10 @@ For sbt projects:
 
 ## Usage
 
+For one folder with both SourceKit BSP and Mill BSP, see the
+[multi-BSP example](examples/multi-bsp/README.md). It includes an Xcode application,
+a Kotlin application, and tests for both.
+
 ### Clean build cache
 
 Right-click a target and choose **Clean Build Cache…**, or run
@@ -179,7 +183,9 @@ profile keeps its existing behavior and result reports.
 
 ### Activation
 
-The extension automatically activates when it detects a `.bsp` directory in your workspace.
+The extension automatically activates when a workspace root contains a `.bsp`
+directory, even if Git or search settings exclude it. Project sources can live in
+subfolders. Activation does not depend on a language extension.
 
 ### Build Targets View
 

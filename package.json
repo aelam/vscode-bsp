@@ -10,6 +10,7 @@
     "Other"
   ],
   "activationEvents": [
+    "workspaceContains:.bsp",
     "workspaceContains:**/.bsp/*",
     "onCommand:bsp.activate",
     "onDebugResolve:bsp-debug",
