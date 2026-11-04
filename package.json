@@ -340,7 +340,7 @@
       "explorer": [
         {
           "id": "bspTargets",
-          "name": "Build Targets",
+          "name": "BSP Targets",
           "when": "bsp.enabled"
         }
       ]
