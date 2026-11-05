@@ -1,6 +1,7 @@
 # BSP Client Extension
 
-A VSCode extension that provides Build Server Protocol (BSP) client functionality.
+A general Build Server Protocol (BSP) client for VS Code. It works with BSP servers
+for different languages and build tools, including sourcekit-bsp for Xcode projects.
 
 ## Features
 
@@ -55,8 +56,14 @@ the cache or change SourceKit's background index. Symbol loading can take longer
 
 ### Prerequisites
 
-1. A BSP-compatible build tool (e.g., Bazel with bazel-bsp, sbt, Mill, etc.)
+1. A BSP-compatible server or build tool, such as bazel-bsp, sbt, Mill, or [sourcekit-bsp](https://github.com/aelam/sourcekit-bsp) for Xcode
 2. VSCode 1.74.0 or later
+
+### Installation
+
+Install an existing local VSIX with **Extensions: Install from VSIX...**.
+To run the extension from source, follow [Building from Source](#building-from-source).
+The development window loads the extension for your application project.
 
 ### Configuration
 
@@ -96,7 +103,38 @@ For [sbt](https://github.com/sbt/sbt) projects:
 }
 ```
 
+For Xcode projects on macOS, install
+[sourcekit-bsp](https://github.com/aelam/sourcekit-bsp#install) and create
+`.bsp/sourcekit-bsp.json` in the application folder containing the
+`.xcodeproj` or `.xcworkspace`:
+
+```json
+{
+  "name": "sourcekit-bsp",
+  "version": "1.0",
+  "bspVersion": "2.2.0",
+  "languages": ["swift", "c", "cpp", "objective-c", "objective-cpp"],
+  "argv": ["/absolute/path/to/sourcekit-bsp"]
+}
+```
+
+Replace the `argv` path with the absolute path to your installed or built server.
+For completion and code navigation, install the
+[Swift extension](https://github.com/swiftlang/vscode-swift), which runs SourceKit-LSP.
+Use the same Xcode toolchain for both; SourceKit-LSP and vscode-bsp use separate BSP connections.
+See the server's [editor setup](https://github.com/aelam/sourcekit-bsp#connect-an-editor)
+for project selection and connection details.
+
 ## Usage
+
+1. Open the application folder containing `.bsp` in VS Code, or add it as a folder in a workspace.
+   Discovery reads `.bsp/*.json` at each workspace folder's root.
+2. The extension discovers and connects to servers on activation.
+   If needed, run **BSP: Connect BSP Servers** from the Command Palette.
+3. Run **BSP: Show Build Targets** to open **BSP Targets** in Explorer.
+   Expand a target and select its build settings, such as sourcekit-bsp's **Configuration** and **Destination**.
+   Use the target's compile, test, run, or debug action, as supported.
+   See [Commands](#commands) for the Command Palette entries.
 
 For one folder with both [sourcekit-bsp](https://github.com/aelam/sourcekit-bsp)
 and [Mill BSP](https://github.com/com-lihaoyi/mill), see the
@@ -159,8 +197,8 @@ Run `npm run test:protocol` to check progress, cancellation, diagnostics, and ou
 
 The native VS Code **Testing** panel lists test targets from connected BSP servers.
 Use **Run Tests** to run a target, or run all targets from the panel toolbar.
-The existing **BSP: Test Target** command also publishes results to this panel.
-Configuration and destination selections come from the Build Targets view.
+The **BSP: Build and Test Target** command also publishes results to this panel.
+Configuration and destination selections come from the BSP Targets view.
 The Stop button cancels the corresponding BSP request.
 
 With an updated sourcekit-bsp, the Swift discovery adapter finds XCTest and Swift
@@ -206,7 +244,7 @@ Build settings resolution, installation and debugger startup still take time.
 
 ### Debug a test target
 
-In **Build Targets**, click the **Build and Debug Target** icon beside a test target.
+In **BSP Targets**, click the **Build and Debug Target** icon beside a test target.
 The command is also available as **BSP: Debug Tests** in the Command Palette.
 It uses the target's selected test configuration and destination. The server must
 advertise both `canTest` and `canDebug`. The client requests `debugSession/start`
@@ -215,7 +253,7 @@ and connects to the returned DAP endpoint.
 With sourcekit-bsp, this runs the whole app-hosted unit test target on an iOS
 simulator. Set breakpoints on executable lines in the test source before starting.
 UI tests, physical-device test debugging, and individual test selection are not
-supported yet. This entry is in Build Targets; the Testing panel's Run Tests
+supported yet. This entry is in BSP Targets; the Testing panel's Run Tests
 profile keeps its existing behavior and result reports.
 
 ### Activation
@@ -224,9 +262,9 @@ The extension automatically activates when a workspace root contains a `.bsp`
 directory, even if Git or search settings exclude it. Project sources can live in
 subfolders. Activation does not depend on a language extension.
 
-### Build Targets View
+### BSP Targets View
 
-- The "Build Targets" view appears in the Explorer panel
+- The "BSP Targets" view appears in the Explorer panel
 - Displays all discoverable build targets with their capabilities
 - Shows target metadata including:
   - Dependencies
@@ -235,12 +273,14 @@ subfolders. Activation does not depend on a language extension.
 
 ### Commands
 
+- **BSP: Connect BSP Servers** - Connect to servers; discover configurations first if none are known
+- **BSP: Discover BSP Connections** - Discover configurations added after activation
 - **BSP: Refresh Build Targets** - Refresh the build targets view
-- **BSP: Show Build Targets** - Focus on the build targets view
-- **BSP: Compile Target** - Compile the selected build target
-- **BSP: Test Target** - Run tests for the selected build target  
-- **BSP: Run Target** - Execute the selected build target
-- **BSP: Build and Debug Target** - Build the selected target and start debugging
+- **BSP: Show Build Targets** - Focus on the BSP Targets view
+- **BSP: Compile Target with the Selected Build Settings** - Compile the selected build target
+- **BSP: Build and Test Target** - Build and run tests for the selected target
+- **BSP: Build and Run Target** - Build and run the selected target
+- **BSP: Build and Debug Target (Build First)** - Build the selected target and start debugging
 
 Hover over a target action to see its description. The Test button appears only
 for targets that advertise `canTest`.
@@ -294,19 +334,20 @@ The extension integrates with VSCode's diagnostics system:
 
 ### Building from Source
 
-```bash
-# Install dependencies
-npm install
+Clone this repository, then run these commands from its root with Node.js, npm,
+and VS Code's `code` command available:
 
-# Compile TypeScript
+```sh
+npm ci
 npm run compile
-
-# Watch mode for development
-npm run watch
-
-# Package extension
-vsce package
+code --new-window --extensionDevelopmentPath="$PWD" /absolute/path/to/application-project
 ```
+
+Replace the application path with the folder that contains your `.bsp` directory.
+This opens a separate VS Code window with the development extension loaded.
+
+Use `npm run watch` to rebuild during development.
+With `vsce` installed, use `vsce package` to package the extension.
 
 ### Testing
 
