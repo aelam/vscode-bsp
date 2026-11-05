@@ -4,7 +4,7 @@ import { sourcekitTestDiscovery } from './sourcekitTestDiscovery';
 import * as vscode from 'vscode';
 import { TargetBusyError } from './bspTargetOperations';
 import { BspClient } from './bspClient';
-import { BuildTarget } from './bspTypes';
+import { BuildTarget, StatusCode } from './bspTypes';
 import { BuildTargetProvider } from './buildTargetProvider';
 import { BspConnectionManager } from './bspConnectionManager';
 import { MultiBspProvider } from './multiBspProvider';
@@ -13,6 +13,7 @@ import { BuildSystemManager } from './buildSystemManager';
 import { revealBuildOutput } from './outputPaths';
 import { cleanBuildCache } from './cleanCache';
 import { initializeBuildLogger, initializeLogger, showBuildOutput, log, logError, logInfo } from './logger';
+import * as path from 'path';
 
 let bspClient: BspClient | undefined;
 let buildTargetProvider: BuildTargetProvider | undefined;
@@ -25,6 +26,31 @@ function reportOperationError(error: unknown): void {
         void vscode.window.showInformationMessage(error.message);
     } else {
         logError('Target operation failed', error);
+    }
+}
+
+function getClientForSelectedTarget(selectedItem: any): BspClient | undefined {
+    const client = selectedItem?.connectionId
+        ? connectionManager?.getConnection(selectedItem.connectionId)?.client
+        : bspClient;
+    if (!client?.connected) {
+        void vscode.window.showErrorMessage('BSP server not connected');
+        return undefined;
+    }
+    return client;
+}
+
+async function compileBeforeTargetAction(client: BspClient, target: BuildTarget, actionName: string): Promise<boolean> {
+    try {
+        const result = await client.compile(target);
+        if (result.statusCode !== StatusCode.Ok) {
+            logInfo(`Skipping ${actionName} because compile did not succeed for ${target.displayName || target.id.uri}`);
+            return false;
+        }
+        return true;
+    } catch (error) {
+        reportOperationError(error);
+        return false;
     }
 }
 
@@ -148,6 +174,170 @@ async function getOrSelectBuildTarget(item?: any, include: (target: BuildTarget)
     }
     
     return null;
+}
+
+interface NavigateFolderItem {
+    label?: string | vscode.TreeItemLabel;
+    buildTarget?: BuildTarget;
+    dependency?: { uri: string };
+}
+
+interface FolderCandidate {
+    uri: vscode.Uri;
+    parentsToTry: number;
+    label?: string;
+}
+
+interface FolderPickItem extends vscode.QuickPickItem {
+    uri: vscode.Uri;
+}
+
+function uriFromBspValue(value: string): vscode.Uri | undefined {
+    const trimmed = value.trim();
+    if (!trimmed) { return undefined; }
+
+    if (path.isAbsolute(trimmed)) {
+        return vscode.Uri.file(trimmed);
+    }
+
+    try {
+        const uri = vscode.Uri.parse(trimmed);
+        if (uri.scheme === 'file') {
+            return uri;
+        }
+        if (uri.path.startsWith('/')) {
+            return vscode.Uri.file(decodeURIComponent(uri.path));
+        }
+    } catch {
+        return undefined;
+    }
+
+    return undefined;
+}
+
+function projectPathFromUriPath(uriPath: string): string | undefined {
+    const decodedPath = decodeURIComponent(uriPath);
+    for (const extension of ['.xcodeproj', '.xcworkspace']) {
+        const index = decodedPath.indexOf(extension);
+        if (index >= 0) {
+            return decodedPath.slice(0, index + extension.length);
+        }
+    }
+    return undefined;
+}
+
+function getNavigateFolderCandidates(item: NavigateFolderItem): FolderCandidate[] {
+    const candidates: FolderCandidate[] = [];
+    const seen = new Set<string>();
+    const addCandidate = (value: string | undefined, parentsToTry: number, label?: string) => {
+        if (!value) { return; }
+        const uri = uriFromBspValue(value);
+        if (!uri || seen.has(uri.toString())) { return; }
+        candidates.push({ uri, parentsToTry, label });
+        seen.add(uri.toString());
+    };
+    const addProjectCandidates = (value: string | undefined) => {
+        if (!value) { return; }
+        let uriPath: string | undefined;
+        try {
+            const uri = vscode.Uri.parse(value.trim());
+            uriPath = uri.path;
+        } catch {
+            uriPath = value;
+        }
+
+        const projectPath = projectPathFromUriPath(uriPath);
+        if (!projectPath) { return; }
+        addCandidate(path.dirname(projectPath), 0, 'Project Folder');
+        addCandidate(projectPath, 0, 'Xcode Project');
+    };
+
+    addCandidate(item.buildTarget?.baseDirectory, 0);
+    addProjectCandidates(item.buildTarget?.id.uri);
+    addCandidate(item.buildTarget?.id.uri, 3);
+    addProjectCandidates(item.dependency?.uri);
+    addCandidate(item.dependency?.uri, 3);
+
+    return candidates;
+}
+
+async function getExistingFolderUri(candidate: FolderCandidate): Promise<vscode.Uri | undefined> {
+    let uri = candidate.uri;
+    let parentsRemaining = candidate.parentsToTry;
+
+    while (true) {
+        try {
+            const stat = await vscode.workspace.fs.stat(uri);
+            if ((stat.type & vscode.FileType.Directory) !== 0) {
+                return uri;
+            }
+
+            const parentPath = path.dirname(uri.fsPath);
+            return parentPath === uri.fsPath ? uri : vscode.Uri.file(parentPath);
+        } catch (error: any) {
+            if (error.code !== 'FileNotFound' || parentsRemaining <= 0) {
+                return undefined;
+            }
+        }
+
+        const parentPath = path.dirname(uri.fsPath);
+        if (parentPath === uri.fsPath) {
+            return undefined;
+        }
+
+        uri = vscode.Uri.file(parentPath);
+        parentsRemaining--;
+    }
+}
+
+function getNavigateItemLabel(item: NavigateFolderItem): string {
+    if (item.buildTarget) {
+        return item.buildTarget.displayName || item.buildTarget.id.uri;
+    }
+    if (item.dependency) {
+        return item.dependency.uri;
+    }
+    if (typeof item.label === 'string') {
+        return item.label;
+    }
+    return 'selected item';
+}
+
+async function navigateToTargetFolder(item?: NavigateFolderItem): Promise<void> {
+    if (!item) { return; }
+
+    const folders: FolderPickItem[] = [];
+    const seen = new Set<string>();
+    for (const candidate of getNavigateFolderCandidates(item)) {
+        const folderUri = await getExistingFolderUri(candidate);
+        if (folderUri && !seen.has(folderUri.toString())) {
+            folders.push({
+                label: candidate.label ?? (path.basename(folderUri.fsPath) || folderUri.fsPath),
+                description: folderUri.fsPath,
+                uri: folderUri
+            });
+            seen.add(folderUri.toString());
+        }
+    }
+
+    if (folders.length === 1) {
+        await vscode.commands.executeCommand('revealInExplorer', folders[0].uri);
+        return;
+    }
+
+    if (folders.length > 1) {
+        const selected = await vscode.window.showQuickPick(folders, {
+            placeHolder: 'Select a folder to reveal in Explorer'
+        });
+        if (selected) {
+            await vscode.commands.executeCommand('revealInExplorer', selected.uri);
+        }
+        return;
+    }
+
+    vscode.window.showInformationMessage(
+        `Could not find a folder for "${getNavigateItemLabel(item)}". The target did not provide a usable base directory and no existing folder could be inferred from its URI.`
+    );
 }
 
 async function prepareDebugConfiguration(
@@ -477,6 +667,10 @@ async function initializeBspExtension(context: vscode.ExtensionContext) {
         }
     });
 
+    const navigateToTargetFolderCommand = vscode.commands.registerCommand('bsp.revealTargetFolder', async (item) => {
+        await navigateToTargetFolder(item);
+    });
+
     const cleanCacheCommand = vscode.commands.registerCommand('bsp.cleanCache', async item => {
         const selected = await getOrSelectBuildTarget(item);
         if (!selected?.buildTarget) { return; }
@@ -511,66 +705,78 @@ async function initializeBspExtension(context: vscode.ExtensionContext) {
     });
 
     const testCommand = vscode.commands.registerCommand('bsp.test', async (item) => {
-        const selectedItem = await getOrSelectBuildTarget(item);
+        const selectedItem = await getOrSelectBuildTarget(item, target => target.capabilities.canCompile && target.capabilities.canTest);
         if (!selectedItem) return;
 
         logInfo(`BSP test command triggered for target: ${selectedItem?.buildTarget?.id?.uri || selectedItem?.id || 'unknown'}`);
-        
-        if (selectedItem?.connectionId && selectedItem?.buildTarget && connectionManager) {
-            const connection = connectionManager.getConnection(selectedItem.connectionId);
-            if (connection?.connected) {
-                await connection.client.test(selectedItem.buildTarget).catch(reportOperationError);
-            } else {
-                vscode.window.showErrorMessage('BSP server not connected');
+
+        if (selectedItem?.buildTarget?.capabilities.canCompile && selectedItem.buildTarget.capabilities.canTest) {
+            const client = getClientForSelectedTarget(selectedItem);
+            if (!client) { return; }
+            if (await compileBeforeTargetAction(client, selectedItem.buildTarget, 'test')) {
+                await client.test(selectedItem.buildTarget).catch(reportOperationError);
             }
-        } else if (bspClient && selectedItem?.buildTarget) {
-            // Fallback for backward compatibility
-            await bspClient.test(selectedItem.buildTarget).catch(reportOperationError);
         } else {
-            vscode.window.showErrorMessage('No valid build target selected');
+            vscode.window.showErrorMessage('No compilable test target selected');
         }
     });
 
     const runCommand = vscode.commands.registerCommand('bsp.run', async (item) => {
-        const selectedItem = await getOrSelectBuildTarget(item);
+        const selectedItem = await getOrSelectBuildTarget(item, target => target.capabilities.canCompile && target.capabilities.canRun);
         if (!selectedItem) return;
 
         logInfo(`BSP run command triggered for target: ${selectedItem?.buildTarget?.id?.uri || selectedItem?.id || 'unknown'}`);
-        
-        if (selectedItem?.connectionId && selectedItem?.buildTarget && connectionManager) {
-            const connection = connectionManager.getConnection(selectedItem.connectionId);
-            if (connection?.connected) {
-                await connection.client.run(selectedItem.buildTarget).catch(reportOperationError);
-            } else {
-                vscode.window.showErrorMessage('BSP server not connected');
+
+        if (selectedItem?.buildTarget?.capabilities.canCompile && selectedItem.buildTarget.capabilities.canRun) {
+            const client = getClientForSelectedTarget(selectedItem);
+            if (!client) { return; }
+            if (await compileBeforeTargetAction(client, selectedItem.buildTarget, 'run')) {
+                await client.run(selectedItem.buildTarget).catch(reportOperationError);
             }
-        } else if (bspClient && selectedItem?.buildTarget) {
-            // Fallback for backward compatibility
-            await bspClient.run(selectedItem.buildTarget).catch(reportOperationError);
         } else {
-            vscode.window.showErrorMessage('No valid build target selected');
+            vscode.window.showErrorMessage('No runnable compile target selected');
         }
     });
 
+    const runWithoutBuildingCommand = vscode.commands.registerCommand('bsp.runWithoutBuilding', async item => {
+        const selected = await getOrSelectBuildTarget(item, target => target.capabilities.canRun);
+        if (!selected?.buildTarget) { return; }
+        const client = selected.connectionId
+            ? connectionManager?.getConnection(selected.connectionId)?.client : bspClient;
+        if (!client?.connected) {
+            void vscode.window.showErrorMessage('BSP server not connected');
+            return;
+        }
+        await client.runWithoutBuilding(selected.buildTarget).catch(reportOperationError);
+    });
+
+    const testWithoutBuildingCommand = vscode.commands.registerCommand('bsp.testWithoutBuilding', async item => {
+        const selected = await getOrSelectBuildTarget(item, target => target.capabilities.canTest);
+        if (!selected?.buildTarget) { return; }
+        const client = selected.connectionId
+            ? connectionManager?.getConnection(selected.connectionId)?.client : bspClient;
+        if (!client?.connected) {
+            void vscode.window.showErrorMessage('BSP server not connected');
+            return;
+        }
+        await client.testWithoutBuilding(selected.buildTarget).catch(reportOperationError);
+    });
+
     const debugCommand = vscode.commands.registerCommand('bsp.debug', async (item) => {
-        const selectedItem = await getOrSelectBuildTarget(item);
+        const selectedItem = await getOrSelectBuildTarget(item, target => target.capabilities.canCompile && target.capabilities.canDebug);
         if (!selectedItem) return;
 
         logInfo(`BSP debug command triggered for target: ${selectedItem?.buildTarget?.id?.uri || selectedItem?.id || 'unknown'}`);
         
         try {
-            if (selectedItem?.connectionId && selectedItem?.buildTarget && connectionManager) {
-                const connection = connectionManager.getConnection(selectedItem.connectionId);
-                if (connection?.connected) {
-                    await connection.client.debug(selectedItem.buildTarget).catch(reportOperationError);
-                } else {
-                    vscode.window.showErrorMessage('BSP server not connected');
+            if (selectedItem?.buildTarget?.capabilities.canCompile && selectedItem.buildTarget.capabilities.canDebug) {
+                const client = getClientForSelectedTarget(selectedItem);
+                if (!client) { return; }
+                if (await compileBeforeTargetAction(client, selectedItem.buildTarget, 'debug')) {
+                    await client.debug(selectedItem.buildTarget).catch(reportOperationError);
                 }
-            } else if (bspClient && selectedItem?.buildTarget) {
-                // Fallback for backward compatibility
-                await bspClient.debug(selectedItem.buildTarget).catch(reportOperationError);
             } else {
-                vscode.window.showErrorMessage('No valid build target selected');
+                vscode.window.showErrorMessage('No debuggable compile target selected');
             }
         } catch (error) {
             logError('Debug failed', error);
@@ -696,10 +902,13 @@ async function initializeBspExtension(context: vscode.ExtensionContext) {
         compileCommand,
         cleanCacheCommand,
         revealOutputCommand,
+        navigateToTargetFolderCommand,
         testCommand,
         runCommand,
+        runWithoutBuildingCommand,
         debugCommand,
         debugWithoutBuildingCommand,
+        testWithoutBuildingCommand,
         debugTestsCommand,
         cancelOperationCommand,
         compileDisabledCommand,

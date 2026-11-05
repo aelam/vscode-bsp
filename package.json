@@ -250,17 +250,24 @@
       },
       {
         "command": "bsp.test",
-        "title": "Run Tests for This Target",
-        "shortTitle": "Test Target",
+        "title": "Build and Test Target",
+        "shortTitle": "Build and Test",
         "category": "BSP",
         "icon": "$(check-all)"
       },
       {
         "command": "bsp.run",
-        "title": "Run Target with the Selected Run Settings",
-        "shortTitle": "Run Target",
+        "title": "Build and Run Target",
+        "shortTitle": "Build and Run",
         "category": "BSP",
         "icon": "$(triangle-right)"
+      },
+      {
+        "command": "bsp.runWithoutBuilding",
+        "title": "Run Without Building",
+        "shortTitle": "Run Without Building",
+        "category": "BSP",
+        "icon": "$(play)"
       },
       {
         "command": "bsp.debug",
@@ -271,10 +278,17 @@
       },
       {
         "command": "bsp.debugWithoutBuilding",
-        "title": "Debug Without Building (Use Existing Build Products)",
+        "title": "Debug Without Building",
         "shortTitle": "Debug Without Building",
         "category": "BSP",
         "icon": "$(debug-start)"
+      },
+      {
+        "command": "bsp.testWithoutBuilding",
+        "title": "Test Without Building",
+        "shortTitle": "Test Without Building",
+        "category": "BSP",
+        "icon": "$(beaker)"
       },
       {
         "command": "bsp.cleanCache",
@@ -285,6 +299,12 @@
       {
         "command": "bsp.revealBuildOutput",
         "title": "Reveal Build Output",
+        "category": "BSP",
+        "icon": "$(folder-opened)"
+      },
+      {
+        "command": "bsp.revealTargetFolder",
+        "title": "Navigate to Folder…",
         "category": "BSP",
         "icon": "$(folder-opened)"
       },
@@ -428,6 +448,11 @@
       ],
       "view/item/context": [
         {
+          "command": "bsp.revealTargetFolder",
+          "when": "view == bspTargets && viewItem =~ /buildTarget|dependency/ && !(viewItem =~ /disconnected|loading/)",
+          "group": "build@4"
+        },
+        {
           "command": "bsp.revealBuildOutput",
           "when": "view == bspTargets && viewItem =~ /buildTarget/ && !(viewItem =~ /disconnected|loading/)",
           "group": "build@5"
@@ -438,23 +463,38 @@
           "group": "build@6"
         },
         {
+          "command": "bsp.runWithoutBuilding",
+          "when": "view == bspTargets && viewItem =~ /buildTarget.*canRun/ && !(viewItem =~ /disconnected|loading|busy/)",
+          "group": "build@7"
+        },
+        {
+          "command": "bsp.testWithoutBuilding",
+          "when": "view == bspTargets && viewItem =~ /buildTarget.*canTest/ && !(viewItem =~ /disconnected|loading|busy/)",
+          "group": "build@8"
+        },
+        {
+          "command": "bsp.debugWithoutBuilding",
+          "when": "view == bspTargets && viewItem =~ /buildTarget.*canDebug/ && !(viewItem =~ /disconnected|loading|busy/)",
+          "group": "build@9"
+        },
+        {
           "command": "bsp.compile",
           "when": "view == bspTargets && viewItem =~ /buildTarget.*canCompile/ && !(viewItem =~ /busy/)",
           "group": "inline@1"
         },
         {
           "command": "bsp.test",
-          "when": "view == bspTargets && viewItem =~ /buildTarget.*canTest/ && !(viewItem =~ /busy/)",
+          "when": "view == bspTargets && viewItem =~ /buildTarget/ && viewItem =~ /canCompile/ && viewItem =~ /canTest/ && !(viewItem =~ /busy/)",
           "group": "inline@2"
         },
         {
           "command": "bsp.run",
-          "when": "view == bspTargets && viewItem =~ /buildTarget.*canRun/ && !(viewItem =~ /busy/)",
+          "when": "view == bspTargets && viewItem =~ /buildTarget/ && viewItem =~ /canCompile/ && viewItem =~ /canRun/ && !(viewItem =~ /busy/)",
           "group": "inline@3"
         },
         {
           "command": "bsp.debug",
-          "when": "view == bspTargets && viewItem =~ /buildTarget.*canDebug/ && !(viewItem =~ /busy/)",
+          "when": "view == bspTargets && viewItem =~ /buildTarget/ && viewItem =~ /canCompile/ && viewItem =~ /canDebug/ && !(viewItem =~ /busy/)",
           "group": "inline@4"
         },
         {
