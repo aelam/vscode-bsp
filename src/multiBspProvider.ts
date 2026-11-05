@@ -501,11 +501,10 @@ export class MultiBspProvider implements vscode.TreeDataProvider<BspTreeItem> {
         return children;
     }
 
-    /// Children of a "Dependencies (N)" node: one item per dependency target.
-    /// Resolves each dependency's URI to the real target (for its displayName)
-    /// when it's known on the connection, otherwise falls back to the URI's
-    /// last path component. Clicking a resolved dependency reuses the
-    /// buildTarget item type so it can be drilled into like any other target.
+    /// Children of a "Dependencies (N)" node: one leaf item per dependency target.
+    /// Resolved targets still use their display names, but dependency children do
+    /// not expand as build targets. That keeps cyclic target graphs from creating
+    /// an endlessly expandable tree.
     private getDependencyItems(target: BuildTarget, connectionId: string): BspTreeItem[] {
         const connection = this.connectionManager.getConnection(connectionId);
         const knownTargets = connection?.client.targets ?? [];
@@ -516,8 +515,8 @@ export class MultiBspProvider implements vscode.TreeDataProvider<BspTreeItem> {
 
             const item = new BspTreeItem(
                 label,
-                resolved ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None,
-                resolved ? 'buildTarget' : 'dependency'
+                vscode.TreeItemCollapsibleState.None,
+                'dependency'
             );
             item.connectionId = connectionId;
             item.buildTarget = resolved;
