@@ -450,32 +450,32 @@
         {
           "command": "bsp.revealTargetFolder",
           "when": "view == bspTargets && viewItem =~ /buildTarget|dependency/ && !(viewItem =~ /disconnected|loading/)",
-          "group": "build@4"
+          "group": "navigation@1"
         },
         {
           "command": "bsp.revealBuildOutput",
           "when": "view == bspTargets && viewItem =~ /buildTarget/ && !(viewItem =~ /disconnected|loading/)",
-          "group": "build@5"
+          "group": "navigation@2"
         },
         {
           "command": "bsp.cleanCache",
           "when": "view == bspTargets && viewItem =~ /buildTarget.*canCleanCache/ && !(viewItem =~ /disconnected|loading|busy/)",
-          "group": "build@6"
+          "group": "build@1"
         },
         {
           "command": "bsp.runWithoutBuilding",
           "when": "view == bspTargets && viewItem =~ /buildTarget.*canRun/ && !(viewItem =~ /disconnected|loading|busy/)",
-          "group": "build@7"
+          "group": "advanced@1"
         },
         {
           "command": "bsp.testWithoutBuilding",
           "when": "view == bspTargets && viewItem =~ /buildTarget.*canTest/ && !(viewItem =~ /disconnected|loading|busy/)",
-          "group": "build@8"
+          "group": "advanced@2"
         },
         {
           "command": "bsp.debugWithoutBuilding",
           "when": "view == bspTargets && viewItem =~ /buildTarget.*canDebug/ && !(viewItem =~ /disconnected|loading|busy/)",
-          "group": "build@9"
+          "group": "advanced@3"
         },
         {
           "command": "bsp.compile",
