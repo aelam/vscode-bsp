@@ -3,7 +3,8 @@ import { TargetBusyError } from './bspTargetOperations';
 
 type PrepareDebug = (
     folder: vscode.WorkspaceFolder | undefined,
-    token: vscode.CancellationToken | undefined
+    token: vscode.CancellationToken | undefined,
+    buildBeforeLaunch?: boolean
 ) => Promise<vscode.DebugConfiguration | undefined>;
 
 export class BspDebugConfigurationProvider implements vscode.DebugConfigurationProvider {
@@ -23,17 +24,26 @@ export class BspDebugConfigurationProvider implements vscode.DebugConfigurationP
         if (config.request === 'attach') {
             throw new Error('BSP Attach needs a live DAP address. Use BSP Debug to request one from the build server.');
         }
-        const resolved = await this.prepare(folder, token).catch(error => {
+        if (config.buildBeforeLaunch !== undefined && typeof config.buildBeforeLaunch !== 'boolean') {
+            throw new Error('buildBeforeLaunch must be a boolean');
+        }
+        const resolved = await this.prepare(folder, token, config.buildBeforeLaunch).catch(error => {
             if (!(error instanceof TargetBusyError)) { throw error; }
             void vscode.window.showInformationMessage(error.message);
             return undefined;
         });
         if (!resolved || token?.isCancellationRequested) { return null; }
-        return { ...config, ...resolved, name: config.name };
+        const merged: vscode.DebugConfiguration = { ...config, ...resolved, name: config.name };
+        // A launch configuration can override the workspace's LLDB commands.
+        if (config.initCommands !== undefined) { merged.initCommands = config.initCommands; }
+        return merged;
     }
 
     provideDebugConfigurations(): vscode.DebugConfiguration[] {
-        return [{ name: 'BSP Debug', request: 'launch', type: 'bsp-debug', stopOnEntry: true }];
+        return [
+            { name: 'BSP Debug', request: 'launch', type: 'bsp-debug', stopOnEntry: true },
+            { name: 'BSP Debug Without Building', request: 'launch', type: 'bsp-debug', buildBeforeLaunch: false, stopOnEntry: true }
+        ];
     }
 }
 
