@@ -761,6 +761,14 @@ async function initializeBspExtension(context: vscode.ExtensionContext) {
         await client.testWithoutBuilding(selected.buildTarget).catch(reportOperationError);
     });
 
+    const debugWithoutBuildingCommand = vscode.commands.registerCommand('bsp.debugWithoutBuilding', async item => {
+        const selected = await getOrSelectBuildTarget(item, target => target.capabilities.canDebug);
+        if (!selected?.buildTarget) { return; }
+        const client = getClientForSelectedTarget(selected);
+        if (!client) { return; }
+        await client.debug(selected.buildTarget).catch(reportOperationError);
+    });
+
     const debugCommand = vscode.commands.registerCommand('bsp.debug', async (item) => {
         const selectedItem = await getOrSelectBuildTarget(item, target => target.capabilities.canCompile && target.capabilities.canDebug);
         if (!selectedItem) return;
@@ -895,6 +903,7 @@ async function initializeBspExtension(context: vscode.ExtensionContext) {
         runWithoutBuildingCommand,
         debugCommand,
         testWithoutBuildingCommand,
+        debugWithoutBuildingCommand,
         debugTestsCommand,
         cancelOperationCommand,
         compileDisabledCommand,

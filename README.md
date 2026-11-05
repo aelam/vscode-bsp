@@ -233,6 +233,11 @@ It uses the target's selected test configuration and destination. The server mus
 advertise both `canTest` and `canDebug`. The client requests `debugSession/start`
 and connects to the returned DAP endpoint.
 
+The target action builds first. The context menu also includes
+**Debug Without Building**, which sends the standard `debugSession/start` request
+directly. BSP treats that request as a debug launch without an implicit compile
+step.
+
 With sourcekit-bsp, this runs the whole app-hosted unit test target on an iOS
 simulator. Set breakpoints on executable lines in the test source before starting.
 UI tests, physical-device test debugging, and individual test selection are not
@@ -264,6 +269,9 @@ subfolders. Activation does not depend on a language extension.
 - **BSP: Build and Test Target** - Build and run tests for the selected target
 - **BSP: Build and Run Target** - Build and run the selected target
 - **BSP: Build and Debug Target (Build First)** - Build the selected target and start debugging
+- **BSP: Run Without Building** - Run the selected target without a compile step
+- **BSP: Test Without Building** - Test the selected target without a compile step
+- **BSP: Debug Without Building** - Debug the selected target without a compile step
 
 Hover over a target action to see its description. The Test button appears only
 for targets that advertise `canTest`.
@@ -274,6 +282,7 @@ Right-click on build targets in the tree view to access:
 - Compile actions for compilable targets
 - Test actions for test targets  
 - Run actions for executable targets
+- Debug actions for debuggable targets
 
 ### Status and Notifications
 

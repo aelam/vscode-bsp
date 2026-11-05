@@ -67,14 +67,23 @@ test('workspace LLDB commands reach target actions and F5 with launch overrides'
     const client = new BspClient(folder.uri);
     const target = { id: { uri: 'target://hello' } };
     let dataKind = 'lldb';
-    client.connection = { sendRequest: async () => ({
-        uri: 'tcp://127.0.0.1:25000', dataKind, data: { request: 'attach', pid: 42 }
-    }) };
+    const requests = [];
+    client.connection = { sendRequest: async (method, params) => {
+        requests.push({ method, params });
+        return {
+            uri: 'tcp://127.0.0.1:25000', dataKind, data: { request: 'attach', pid: 42 }
+        };
+    } };
     lldbInitCommands = ['settings set symbols.enable-lldb-index-cache false'];
     const provider = new BspDebugConfigurationProvider((_folder, token) =>
         client.prepareDebugConfiguration(target, token));
     try {
         await client.debug(target);
+        assert.equal(requests.at(-1).method, 'debugSession/start');
+        assert.deepEqual(Object.keys(requests.at(-1).params).sort(), ['arguments', 'originId', 'targets']);
+        assert.deepEqual(requests.at(-1).params.targets, [target.id]);
+        assert.deepEqual(requests.at(-1).params.arguments, []);
+        assert.equal(requests.at(-1).params.dataKind, undefined);
         assert.deepEqual(starts.at(-1)[1].initCommands, lldbInitCommands);
         const f5 = await provider.resolveDebugConfiguration(folder, { request: 'launch' });
         assert.deepEqual(f5.initCommands, lldbInitCommands);
@@ -245,12 +254,20 @@ test('test targets use the debug icon with test arguments and do not stop at ent
             assert.match(starts.at(-1)[1].name, /Debug Tests/);
         }
         await assert.rejects(client.debugTests({ ...target, capabilities: { canTest: true, canDebug: false } }), /does not support/);
-        const menus = require('../package.json').contributes.menus['view/item/context'];
+        const manifest = require('../package.json');
+        const menus = manifest.contributes.menus['view/item/context'];
         assert.equal(menus.some(m => m.command === 'bsp.debugTests'), false);
         const icon = menus.find(m => m.command === 'bsp.debug');
         assert.match(icon.group, /inline/);
         assert.match(icon.when, /canDebug/);
         assert.match(icon.when, /busy/);
+        assert.match(icon.when, /canCompile/);
+        const withoutBuilding = menus.find(m => m.command === 'bsp.debugWithoutBuilding');
+        assert.equal(manifest.contributes.commands.find(c => c.command === 'bsp.debugWithoutBuilding').title, 'Debug Without Building');
+        assert.match(withoutBuilding.group, /advanced/);
+        assert.match(withoutBuilding.when, /canDebug/);
+        assert.match(withoutBuilding.when, /busy/);
+        assert.doesNotMatch(withoutBuilding.when, /canCompile/);
         client.buildSystemManager.getTestArguments = async () => { throw new Error('Invalid test destination'); };
         await assert.rejects(client.debug(target), /Invalid test destination/);
     } finally { client.debugSessions.dispose(); starts.length = 0; }
