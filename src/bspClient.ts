@@ -57,7 +57,6 @@ export class BspClient {
     private serverProcess: ChildProcess | undefined;
     private buildTargets: BuildTarget[] = [];
     private serverCapabilities: BuildServerCapabilities = {};
-    private supportsDebugWithoutBuilding = false;
     private isConnected = false;
     private workspaceUri: vscode.Uri;
     private connectionDetails: BspConnectionDetails | undefined;
@@ -402,16 +401,12 @@ export class BspClient {
         return this.debugTarget(target, true);
     }
 
-    debugWithoutBuilding(target: BuildTarget): Promise<DebugSessionAddressResult> {
-        return this.debugTarget(target, target.capabilities?.canTest === true && !target.capabilities.canRun, false);
-    }
-
-    private debugTarget(target: BuildTarget, testing: boolean, buildBeforeLaunch = true): Promise<DebugSessionAddressResult> {
+    private debugTarget(target: BuildTarget, testing: boolean): Promise<DebugSessionAddressResult> {
         return this.executeWithProgress('debug', target.id.uri, async (originId, cancellation) => {
             if (testing && (!target.capabilities.canTest || !target.capabilities.canDebug)) {
                 throw new Error('This build target does not support test debugging');
             }
-            const result = await this.requestDebugSession(target, originId, cancellation, testing, buildBeforeLaunch);
+            const result = await this.requestDebugSession(target, originId, cancellation, testing);
             if (cancellation.isCancellationRequested) { throw new Error('Debug cancelled'); }
             this.operations.get(target.id.uri)?.report('Connecting debugger');
             const configuration = this.configurationForDebugResult(result, target.id.uri);
@@ -424,25 +419,22 @@ export class BspClient {
         });
     }
 
-    prepareDebugConfiguration(target: BuildTarget, token?: vscode.CancellationToken, buildBeforeLaunch = true): Promise<vscode.DebugConfiguration> {
+    prepareDebugConfiguration(target: BuildTarget, token?: vscode.CancellationToken): Promise<vscode.DebugConfiguration> {
         return this.executeWithProgress('debug', target.id.uri, async (originId, cancellation) => {
             const testing = target.capabilities?.canTest === true && !target.capabilities.canRun;
-            const result = await this.requestDebugSession(target, originId, cancellation, testing, buildBeforeLaunch);
+            const result = await this.requestDebugSession(target, originId, cancellation, testing);
             if (cancellation.isCancellationRequested) { throw new Error('Debug cancelled'); }
             return this.configurationForDebugResult(result, target.id.uri);
         }, { token });
     }
 
-    private async requestDebugSession(target: BuildTarget, originId: string, token: CancellationToken, testing = false, buildBeforeLaunch = true): Promise<DebugSessionAddressResult> {
+    private async requestDebugSession(target: BuildTarget, originId: string, token: CancellationToken, testing = false): Promise<DebugSessionAddressResult> {
         const targetId = target.id.uri;
         
         if (!this.connection) {
             throw new Error('BSP client not connected');
         }
 
-        if (!buildBeforeLaunch && !this.supportsDebugWithoutBuilding) {
-            throw new Error('This build server does not support debugging without building. Update sourcekit-bsp and reconnect.');
-        }
         await this.stopPreviousDebugSession(targetId);
 
         // Use the selected arguments for the operation being debugged.
@@ -464,11 +456,6 @@ export class BspClient {
             originId,
             arguments: debugArgs
         };
-        if (!buildBeforeLaunch) {
-            params.dataKind = 'sourcekit-bsp-debug';
-            params.data = { buildBeforeLaunch: false };
-        }
-
         if (token.isCancellationRequested) { throw new Error('Debug cancelled'); }
         try {
             log(`🐛 Starting debug for ${target.displayName || targetId}`);
@@ -606,7 +593,6 @@ export class BspClient {
         try {
             const result: InitializeBuildResult = await this.connection.sendRequest('build/initialize', initParams);
             this.serverCapabilities = result.capabilities;
-            this.supportsDebugWithoutBuilding = result.data?.debugWithoutBuildingProvider === true;
             log(`BSP server initialized: ${JSON.stringify(result)}`);
 
             // Send initialized notification

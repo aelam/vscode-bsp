@@ -34,9 +34,9 @@ The target's **Debug** action uses the same server request. A manual **Attach**
 configuration is only for a live DAP endpoint whose address you already know.
 
 For an LLDB adapter, `bsp.debug.lldbInitCommands` in workspace settings applies
-to F5 and the target's Debug actions, including Debug Without Building. An
-explicit `initCommands` array in `launch.json` overrides the workspace array.
-Other adapters do not receive these workspace commands.
+to F5 and the target's Debug actions. An explicit `initCommands` array in
+`launch.json` overrides the workspace array. Other adapters do not receive these
+workspace commands.
 
 If LLDB crashes in `Symbol::ResolveReExportedSymbol` with its index cache enabled,
 test this workspace setting:
@@ -224,23 +224,6 @@ tests run as a whole function; individual arguments are not supported.
 Output is available in Test Results and **Output → vscode-bsp-log**.
 See the server's [test selection contract](https://github.com/aelam/sourcekit-bsp/blob/main/Docs/wiki/Build-Run-Test-Debug.md#test-discovery-and-selection)
 for the optional metadata and payloads.
-
-### Debug without building
-
-To reuse an existing build, use **BSP: Debug Without Building** from the Command
-Palette, or add `"buildBeforeLaunch": false` to a `bsp-debug` launch configuration.
-The default Debug command still builds before it starts the debugger.
-
-This option requires a sourcekit-bsp version that advertises
-`data.debugWithoutBuildingProvider` in its initialization response. The client
-sends `dataKind: "sourcekit-bsp-debug"` and `data: { buildBeforeLaunch: false }`
-in `debugSession/start`. Older servers produce an error instead of silently
-building again.
-
-Compile with the same configuration, destination and DerivedData directory first.
-The server checks that the products exist, but does not check whether they match
-your latest source edits. Test debugging also needs the test bundle and host app.
-Build settings resolution, installation and debugger startup still take time.
 
 ### Debug a test target
 

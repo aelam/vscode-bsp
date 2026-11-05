@@ -98,8 +98,6 @@ export interface DebugSessionParams {
     /// Build arguments (e.g. -configuration / -destination) — same selection
     /// used for run, so the debug build targets the chosen simulator/device.
     arguments?: string[];
-    dataKind?: string;
-    data?: any;
 }
 
 export interface DebugSessionAddress {
