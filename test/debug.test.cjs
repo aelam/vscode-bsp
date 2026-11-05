@@ -8,11 +8,22 @@ const { debugConfiguration } = require('../out/debugConfiguration');
 const starts = [];
 const folder = { uri: { fsPath: '/hello' } };
 let startResult = true;
+let lldbInitCommands = [];
 const vscode = {
     DebugAdapterServer: class { constructor(port, host) { Object.assign(this, { port, host }); } },
     DebugAdapterNamedPipeServer: class { constructor(path) { this.path = path; } },
     languages: { createDiagnosticCollection: () => ({}) },
-    workspace: { getWorkspaceFolder: () => folder },
+    workspace: {
+        getWorkspaceFolder: () => folder,
+        getConfiguration: (section, resource) => {
+            assert.equal(section, 'bsp.debug');
+            assert.equal(resource, folder.uri);
+            return { get: (key) => {
+                assert.equal(key, 'lldbInitCommands');
+                return lldbInitCommands;
+            } };
+        }
+    },
     ProgressLocation: { Notification: 15 },
     window: {
         withProgress: (_options, action) => action({ report() {} }, CancellationToken.None),
@@ -49,6 +60,40 @@ test('uses each server-assigned address and preserves attach and launch paramete
 test('rejects invalid endpoints without falling back to port 5005', () => {
     for (const uri of ['tcp://localhost', 'tcp://localhost:0', 'tcp://localhost:70000', 'http://localhost:5005', 'unix:///']) {
         assert.throws(() => debugConfiguration({ uri }, 'Hello'));
+    }
+});
+
+test('workspace LLDB commands reach target actions and F5 with launch overrides', async () => {
+    const client = new BspClient(folder.uri);
+    const target = { id: { uri: 'target://hello' } };
+    let dataKind = 'lldb';
+    client.connection = { sendRequest: async () => ({
+        uri: 'tcp://127.0.0.1:25000', dataKind, data: { request: 'attach', pid: 42 }
+    }) };
+    client.supportsDebugWithoutBuilding = true;
+    lldbInitCommands = ['settings set symbols.enable-lldb-index-cache false'];
+    const provider = new BspDebugConfigurationProvider((_folder, token, buildBeforeLaunch) =>
+        client.prepareDebugConfiguration(target, token, buildBeforeLaunch));
+    try {
+        await client.debugWithoutBuilding(target);
+        assert.deepEqual(starts.at(-1)[1].initCommands, lldbInitCommands);
+        const f5 = await provider.resolveDebugConfiguration(folder, { request: 'launch', buildBeforeLaunch: false });
+        assert.deepEqual(f5.initCommands, lldbInitCommands);
+        for (const override of [[], ['settings set target.preload-symbols false']]) {
+            const config = await provider.resolveDebugConfiguration(folder,
+                { request: 'launch', buildBeforeLaunch: false, initCommands: override });
+            assert.deepEqual(config.initCommands, override);
+        }
+        for (dataKind of ['other', undefined]) {
+            assert.equal((await client.prepareDebugConfiguration(target)).initCommands, undefined);
+        }
+        dataKind = 'lldb';
+        lldbInitCommands = ['valid', 42];
+        await assert.rejects(client.prepareDebugConfiguration(target), /must be an array of strings/);
+    } finally {
+        lldbInitCommands = [];
+        starts.length = 0;
+        client.debugSessions.dispose();
     }
 });
 
@@ -164,6 +209,70 @@ test('cancelled selection does not open launch.json or create a debug session', 
     const cancelled = new BspDebugConfigurationProvider(() => assert.fail('Cancelled request'));
     assert.equal(await cancelled.resolveDebugConfiguration(folder, {}, { isCancellationRequested: true }), null);
     await assert.rejects(provider.resolveDebugConfiguration(folder, { request: 'attach' }), /live DAP address/);
+});
+
+test('F5 and the target command send skip-build options without changing build arguments', async () => {
+    const client = new BspClient(folder.uri, undefined, undefined, {
+        getDebugInfo: () => ({}), canHandle: () => true,
+        getRunArguments: async () => ['-configuration', 'Debug', '-destination', 'id=SIM']
+    });
+    const target = { id: { uri: 'target://hello' }, capabilities: { canRun: true, canDebug: true } };
+    const sent = [];
+    client.supportsDebugWithoutBuilding = true;
+    client.connection = { sendRequest: async (method, params) => {
+        sent.push({ method, params });
+        return { uri: 'tcp://127.0.0.1:25000', data: { request: 'attach', pid: 42 } };
+    } };
+    const provider = new BspDebugConfigurationProvider((_folder, token, buildBeforeLaunch) =>
+        client.prepareDebugConfiguration(target, token, buildBeforeLaunch));
+    try {
+        const config = await provider.resolveDebugConfiguration(folder,
+            { request: 'launch', buildBeforeLaunch: false });
+        assert.equal(config.request, 'attach');
+        assert.equal(config.buildBeforeLaunch, false);
+        await client.debugWithoutBuilding(target);
+        assert.equal(sent.length, 2);
+        for (const { method, params } of sent) {
+            assert.equal(method, 'debugSession/start');
+            assert.equal(params.dataKind, 'sourcekit-bsp-debug');
+            assert.deepEqual(params.data, { buildBeforeLaunch: false });
+            assert.deepEqual(params.arguments, ['-configuration', 'Debug', '-destination', 'id=SIM']);
+        }
+        await provider.resolveDebugConfiguration(folder, { request: 'launch', buildBeforeLaunch: true });
+        assert.equal(sent.at(-1).params.data, undefined);
+        assert.equal(starts.length, 1);
+    } finally { client.debugSessions.dispose(); starts.length = 0; }
+});
+
+test('old servers reject skip-build before stopping a session or sending a request', async () => {
+    const client = new BspClient(folder.uri);
+    client.connection = { sendRequest: () => assert.fail('Must not ask an old server to build') };
+    client.stopPreviousDebugSession = () => assert.fail('Must preserve the active session');
+    try {
+        await assert.rejects(client.debugWithoutBuilding({ id: { uri: 'target://hello' } }), /Update sourcekit-bsp and reconnect/);
+    } finally { client.debugSessions.dispose(); }
+    const provider = new BspDebugConfigurationProvider(() => assert.fail('Invalid option'));
+    await assert.rejects(provider.resolveDebugConfiguration(folder, { buildBeforeLaunch: 'false' }), /must be a boolean/);
+});
+
+test('initialization negotiates skip-build support and clears it on reconnect to an older server', async () => {
+    const client = new BspClient({ fsPath: '/hello', toString: () => 'file:///hello' });
+    client.connectionDetails = { languages: ['swift'] };
+    let data = { debugWithoutBuildingProvider: true };
+    client.connection = {
+        sendRequest: async method => {
+            assert.equal(method, 'build/initialize');
+            return { capabilities: {}, data };
+        },
+        sendNotification() {}
+    };
+    try {
+        await client.initializeConnection();
+        assert.equal(client.supportsDebugWithoutBuilding, true);
+        data = undefined;
+        await client.initializeConnection();
+        assert.equal(client.supportsDebugWithoutBuilding, false);
+    } finally { client.debugSessions.dispose(); }
 });
 
 test('default configuration and schema are registered under contributes without a fixed port', () => {
