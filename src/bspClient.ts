@@ -348,6 +348,14 @@ export class BspClient {
         return this.runTarget(target);
     }
 
+    runWithoutBuilding(target: BuildTarget): Promise<RunResult> {
+        return this.runTarget(target);
+    }
+
+    testWithoutBuilding(target: BuildTarget): Promise<TestResult> {
+        return this.test(target);
+    }
+
     private runTarget(target: BuildTarget): Promise<RunResult> {
         const targetId = target.id.uri;
         

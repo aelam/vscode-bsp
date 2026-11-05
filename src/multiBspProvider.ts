@@ -520,8 +520,10 @@ export class MultiBspProvider implements vscode.TreeDataProvider<BspTreeItem> {
             );
             item.connectionId = connectionId;
             item.buildTarget = resolved;
+            item.dependency = dependency;
             item.description = dependency.uri;
             item.tooltip = dependency.uri;
+            item.contextValue = 'dependency';
             item.iconPath = new vscode.ThemeIcon('references');
             return item;
         });
@@ -732,4 +734,5 @@ export class BspTreeItem extends vscode.TreeItem {
 
     public connectionId?: string;
     public buildTarget?: BuildTarget;
+    public dependency?: BuildTargetIdentifier;
 }
