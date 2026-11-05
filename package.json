@@ -76,11 +76,6 @@
                 "items": { "type": "string" },
                 "description": "Adapter initialization commands. For LLDB, overrides bsp.debug.lldbInitCommands for this launch configuration."
               },
-              "buildBeforeLaunch": {
-                "type": "boolean",
-                "default": true,
-                "description": "Build before debugging. Set false to use existing products with a server that supports debugging without building."
-              },
               "connect": {
                 "type": "object",
                 "description": "DAP address returned by the build server.",
@@ -190,27 +185,9 @@
             "type": "bsp-debug",
             "request": "launch",
             "stopOnEntry": true
-          },
-          {
-            "name": "BSP Debug Without Building",
-            "type": "bsp-debug",
-            "request": "launch",
-            "buildBeforeLaunch": false,
-            "stopOnEntry": true
           }
         ],
         "configurationSnippets": [
-          {
-            "label": "BSP Debug Without Building",
-            "description": "Debug existing products without building them again.",
-            "body": {
-              "name": "BSP Debug Without Building",
-              "type": "bsp-debug",
-              "request": "launch",
-              "buildBeforeLaunch": false,
-              "stopOnEntry": true
-            }
-          },
           {
             "label": "BSP Debug",
             "description": "Request a debug session from the build server.",
@@ -270,18 +247,18 @@
         "icon": "$(play)"
       },
       {
+        "command": "bsp.debugWithoutBuilding",
+        "title": "Debug Without Building",
+        "shortTitle": "Debug Without Building",
+        "category": "BSP",
+        "icon": "$(debug-alt)"
+      },
+      {
         "command": "bsp.debug",
         "title": "Build and Debug Target (Build First)",
         "shortTitle": "Build and Debug Target",
         "category": "BSP",
         "icon": "$(debug-alt)"
-      },
-      {
-        "command": "bsp.debugWithoutBuilding",
-        "title": "Debug Without Building",
-        "shortTitle": "Debug Without Building",
-        "category": "BSP",
-        "icon": "$(debug-start)"
       },
       {
         "command": "bsp.testWithoutBuilding",

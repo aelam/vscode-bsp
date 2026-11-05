@@ -342,8 +342,7 @@ async function navigateToTargetFolder(item?: NavigateFolderItem): Promise<void> 
 
 async function prepareDebugConfiguration(
     folder: vscode.WorkspaceFolder | undefined,
-    token: vscode.CancellationToken | undefined,
-    buildBeforeLaunch?: boolean
+    token: vscode.CancellationToken | undefined
 ): Promise<vscode.DebugConfiguration | undefined> {
     const connections = connectionManager?.getConnectedClients() ?? [];
     const clients = connections.filter(connection =>
@@ -367,7 +366,7 @@ async function prepareDebugConfiguration(
         choices, { placeHolder: 'Select a build target to debug' }, token
     );
     if (!selected || token?.isCancellationRequested) { return undefined; }
-    return selected.client.prepareDebugConfiguration(selected.target, token, buildBeforeLaunch);
+    return selected.client.prepareDebugConfiguration(selected.target, token);
 }
 
 export async function activate(context: vscode.ExtensionContext) {
@@ -762,6 +761,14 @@ async function initializeBspExtension(context: vscode.ExtensionContext) {
         await client.testWithoutBuilding(selected.buildTarget).catch(reportOperationError);
     });
 
+    const debugWithoutBuildingCommand = vscode.commands.registerCommand('bsp.debugWithoutBuilding', async item => {
+        const selected = await getOrSelectBuildTarget(item, target => target.capabilities.canDebug);
+        if (!selected?.buildTarget) { return; }
+        const client = getClientForSelectedTarget(selected);
+        if (!client) { return; }
+        await client.debug(selected.buildTarget).catch(reportOperationError);
+    });
+
     const debugCommand = vscode.commands.registerCommand('bsp.debug', async (item) => {
         const selectedItem = await getOrSelectBuildTarget(item, target => target.capabilities.canCompile && target.capabilities.canDebug);
         if (!selectedItem) return;
@@ -782,18 +789,6 @@ async function initializeBspExtension(context: vscode.ExtensionContext) {
             logError('Debug failed', error);
             vscode.window.showErrorMessage(`Debug failed: ${error}`);
         }
-    });
-
-    const debugWithoutBuildingCommand = vscode.commands.registerCommand('bsp.debugWithoutBuilding', async item => {
-        const selected = await getOrSelectBuildTarget(item, target => target.capabilities.canDebug);
-        if (!selected?.buildTarget) { return; }
-        const client = selected.connectionId
-            ? connectionManager?.getConnection(selected.connectionId)?.client : bspClient;
-        if (!client?.connected) {
-            void vscode.window.showErrorMessage('BSP server not connected');
-            return;
-        }
-        await client.debugWithoutBuilding(selected.buildTarget).catch(reportOperationError);
     });
 
     const debugTestsCommand = vscode.commands.registerCommand('bsp.debugTests', async item => {
@@ -907,8 +902,8 @@ async function initializeBspExtension(context: vscode.ExtensionContext) {
         runCommand,
         runWithoutBuildingCommand,
         debugCommand,
-        debugWithoutBuildingCommand,
         testWithoutBuildingCommand,
+        debugWithoutBuildingCommand,
         debugTestsCommand,
         cancelOperationCommand,
         compileDisabledCommand,

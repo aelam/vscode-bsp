@@ -151,6 +151,9 @@ test('normal and favorite rows share busy state while other connections remain e
     for(const command of ['bsp.compile','bsp.test','bsp.run','bsp.debug']) {
         assert.match(menus.find(item=>item.command===command).when,/!\(viewItem =~ \/busy\/\)/);
     }
+    for(const command of ['bsp.runWithoutBuilding','bsp.testWithoutBuilding','bsp.debugWithoutBuilding']) {
+        assert.match(menus.find(item=>item.command===command).when,/busy/);
+    }
 });
 
 test('index preparation status uses server progress, keeps parent tasks alive, and handles failure and disconnect', () => {

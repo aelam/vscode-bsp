@@ -190,6 +190,26 @@ test('client connects task notifications to the request window and sends cancell
     assert.equal(client.operations.get(target.id.uri), undefined);
     assert.equal(client.getActiveRequests().size, 0);
     debug.activeDebugSession = undefined;
+    const standardRequests = [];
+    client.serverCapabilities.testProvider = { languageIds: ['swift'] };
+    const standardTarget = { id: { uri: 'target://standard' }, displayName: 'Standard', capabilities: { canTest: true } };
+    client.connection.sendRequest = async (method, params) => {
+        standardRequests.push({ method, params });
+        return { statusCode: 1 };
+    };
+    assert.equal((await client.runWithoutBuilding(standardTarget)).statusCode, 1);
+    assert.equal((await client.testWithoutBuilding(standardTarget)).statusCode, 1);
+    assert.equal(standardRequests.length, 2);
+    assert.equal(standardRequests[0].method, 'buildTarget/run');
+    assert.deepEqual(Object.keys(standardRequests[0].params).sort(), ['arguments', 'originId', 'target']);
+    assert.deepEqual(standardRequests[0].params.target, standardTarget.id);
+    assert.deepEqual(standardRequests[0].params.arguments, []);
+    assert.equal(standardRequests[0].params.dataKind, undefined);
+    assert.equal(standardRequests[1].method, 'buildTarget/test');
+    assert.deepEqual(Object.keys(standardRequests[1].params).sort(), ['arguments', 'originId', 'targets']);
+    assert.deepEqual(standardRequests[1].params.targets, [standardTarget.id]);
+    assert.deepEqual(standardRequests[1].params.arguments, []);
+    assert.equal(standardRequests[1].params.dataKind, undefined);
     const nativeEvents = [];
     const nativeSubscription = client.onTestEvent(event => nativeEvents.push(event));
     const nativeCancellation = new (require('vscode-jsonrpc/node').CancellationTokenSource)();

@@ -34,9 +34,9 @@ The target's **Debug** action uses the same server request. A manual **Attach**
 configuration is only for a live DAP endpoint whose address you already know.
 
 For an LLDB adapter, `bsp.debug.lldbInitCommands` in workspace settings applies
-to F5 and the target's Debug actions, including Debug Without Building. An
-explicit `initCommands` array in `launch.json` overrides the workspace array.
-Other adapters do not receive these workspace commands.
+to F5 and the target's Debug actions. An explicit `initCommands` array in
+`launch.json` overrides the workspace array. Other adapters do not receive these
+workspace commands.
 
 If LLDB crashes in `Symbol::ResolveReExportedSymbol` with its index cache enabled,
 test this workspace setting:
@@ -225,23 +225,6 @@ Output is available in Test Results and **Output → vscode-bsp-log**.
 See the server's [test selection contract](https://github.com/aelam/sourcekit-bsp/blob/main/Docs/wiki/Build-Run-Test-Debug.md#test-discovery-and-selection)
 for the optional metadata and payloads.
 
-### Debug without building
-
-To reuse an existing build, use **BSP: Debug Without Building** from the Command
-Palette, or add `"buildBeforeLaunch": false` to a `bsp-debug` launch configuration.
-The default Debug command still builds before it starts the debugger.
-
-This option requires a sourcekit-bsp version that advertises
-`data.debugWithoutBuildingProvider` in its initialization response. The client
-sends `dataKind: "sourcekit-bsp-debug"` and `data: { buildBeforeLaunch: false }`
-in `debugSession/start`. Older servers produce an error instead of silently
-building again.
-
-Compile with the same configuration, destination and DerivedData directory first.
-The server checks that the products exist, but does not check whether they match
-your latest source edits. Test debugging also needs the test bundle and host app.
-Build settings resolution, installation and debugger startup still take time.
-
 ### Debug a test target
 
 In **BSP Targets**, click the **Build and Debug Target** icon beside a test target.
@@ -249,6 +232,11 @@ The command is also available as **BSP: Debug Tests** in the Command Palette.
 It uses the target's selected test configuration and destination. The server must
 advertise both `canTest` and `canDebug`. The client requests `debugSession/start`
 and connects to the returned DAP endpoint.
+
+The target action builds first. The context menu also includes
+**Debug Without Building**, which sends the standard `debugSession/start` request
+directly. BSP treats that request as a debug launch without an implicit compile
+step.
 
 With sourcekit-bsp, this runs the whole app-hosted unit test target on an iOS
 simulator. Set breakpoints on executable lines in the test source before starting.
@@ -281,6 +269,9 @@ subfolders. Activation does not depend on a language extension.
 - **BSP: Build and Test Target** - Build and run tests for the selected target
 - **BSP: Build and Run Target** - Build and run the selected target
 - **BSP: Build and Debug Target (Build First)** - Build the selected target and start debugging
+- **BSP: Run Without Building** - Run the selected target without a compile step
+- **BSP: Test Without Building** - Test the selected target without a compile step
+- **BSP: Debug Without Building** - Debug the selected target without a compile step
 
 Hover over a target action to see its description. The Test button appears only
 for targets that advertise `canTest`.
@@ -291,6 +282,7 @@ Right-click on build targets in the tree view to access:
 - Compile actions for compilable targets
 - Test actions for test targets  
 - Run actions for executable targets
+- Debug actions for debuggable targets
 
 ### Status and Notifications
 
