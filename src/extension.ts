@@ -478,7 +478,10 @@ async function initializeBspExtension(context: vscode.ExtensionContext) {
         ['bsp.contextCompile', (item: any) => contexts.execute(item, 'compile')],
         ['bsp.contextRun', (item: any) => contexts.execute(item, 'run')],
         ['bsp.contextTest', (item: any) => contexts.execute(item, 'test')],
-        ['bsp.contextDebug', (item: any) => contexts.execute(item, 'debug')]
+        ['bsp.contextDebug', (item: any) => contexts.execute(item, 'debug')],
+        ['bsp.contextRunWithoutBuilding', (item: any) => contexts.execute(item, 'run', 'reuse')],
+        ['bsp.contextTestWithoutBuilding', (item: any) => contexts.execute(item, 'test', 'reuse')],
+        ['bsp.contextDebugWithoutBuilding', (item: any) => contexts.execute(item, 'debug', 'reuse')]
     ] as const) {
         context.subscriptions.push(vscode.commands.registerCommand(command, async item => {
             try { await action(item); }
@@ -786,11 +789,7 @@ async function initializeBspExtension(context: vscode.ExtensionContext) {
         if (!selected?.buildTarget) { return; }
         const client = getClientForSelectedTarget(selected);
         if (!client) { return; }
-        if (client.contexts.enabled) {
-            void vscode.window.showInformationMessage('This server prepares execution contexts before debugging. Use Debug Target.');
-            return;
-        }
-        await client.debug(selected.buildTarget).catch(reportOperationError);
+        await client.debugWithoutBuilding(selected.buildTarget).catch(reportOperationError);
     });
 
     const debugCommand = vscode.commands.registerCommand('bsp.debug', async (item) => {

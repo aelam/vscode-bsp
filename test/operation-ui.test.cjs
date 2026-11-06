@@ -342,3 +342,71 @@ test('clean state appears on normal and favorite rows with no cancel action', as
     c.requests[0].resolve({ cleaned: true }); await pending;
     assert.match(provider.getTreeItem(make('server-0', true)).contextValue, /canCleanCache/);
 });
+
+test('expanded context targets omit configuration entries and preserve legacy selectors', async () => {
+    const contextual = client(), legacy = client();
+    contextual.contexts.negotiate({ bspExtensions: { 'vscode-bsp.build-context': {
+        version: '0.1', required: true, operations: ['compile', 'run', 'test', 'debug']
+    } } });
+    let selectorCalls = 0;
+    const buildSystem = {
+        onDidChangeConfiguration: () => ({ dispose() {} }),
+        canHandle: () => true,
+        getBuildSettingsDescription: () => 'Legacy Debug configuration',
+        getManagerForTarget: () => ({ getDynamicSelectors: async () => {
+            selectorCalls++;
+            return { selectors: [{ keyName: 'configuration', displayLabel: 'Configuration: Debug' }] };
+        } })
+    };
+    const provider = new MultiBspProvider(manager([contextual, legacy]), undefined, buildSystem);
+    const row = connectionId => {
+        const item = new BspTreeItem('App', vscode.TreeItemCollapsibleState.Collapsed, 'buildTarget');
+        item.connectionId = connectionId;
+        item.buildTarget = { ...target(), dependencies: [{ uri: 'target://library' }] };
+        return item;
+    };
+    const children = await provider.getChildren(row('server-0'));
+    assert.ok(children.every(item => item.label !== 'Execution Configuration'));
+    assert.ok(children.every(item => item.command?.command !== 'bsp.configureContext'));
+    assert.ok(children.every(item => !['buildConfig', 'customSelector'].includes(item.type)));
+    assert.ok(children.some(item => item.type === 'dependencies'));
+    assert.ok(children.some(item => item.type === 'languages'));
+    assert.equal(selectorCalls, 0);
+    const legacyChildren = await provider.getChildren(row('server-1'));
+    assert.ok(legacyChildren.some(item => item.type === 'buildConfig' && item.label === 'Legacy Debug configuration'));
+    assert.ok(legacyChildren.some(item => item.type === 'customSelector' && item.label === 'Configuration: Debug'));
+    assert.equal(selectorCalls, 1);
+});
+
+
+test('Without Building menus require reuse support for contexts and retain legacy actions', () => {
+    const c = client(), provider = new MultiBspProvider(manager([c]), undefined, {
+        onDidChangeConfiguration: () => ({ dispose() {} }), canHandle: () => false
+    });
+    c.serverCapabilities.runProvider = { languageIds: ['swift'] };
+    c.serverCapabilities.debugProvider = { languageIds: ['swift'] };
+    const descriptor = { version: '0.1', required: true, operations: ['run', 'test', 'debug'] };
+    const row = new BspTreeItem('App', 1, 'buildTarget');
+    row.connectionId = 'server-0'; row.buildTarget = target();
+    const show = () => provider.getTreeItem(row).contextValue;
+    assert.doesNotMatch(show(), /supportsBuildContext|canReuseBuild/);
+    c.contexts.negotiate({ bspExtensions: { 'vscode-bsp.build-context': descriptor } });
+    assert.match(show(), /supportsBuildContext/);
+    assert.doesNotMatch(show(), /canReuseBuild/);
+    c.contexts.negotiate({ bspExtensions: { 'vscode-bsp.build-context': {
+        ...descriptor, buildPolicies: ['build', 'reuse']
+    } } });
+    assert.match(show(), /supportsBuildContext.*canReuseBuild/);
+    const menus = require('../package.json').contributes.menus['view/item/context'];
+    for (const action of ['Run', 'Test', 'Debug']) {
+        const targetMenu = menus.find(item => item.command === `bsp.${action.toLowerCase()}WithoutBuilding`);
+        assert.match(targetMenu.when, new RegExp(`can${action}`));
+        assert.match(targetMenu.when, /!\(viewItem =~ \/supportsBuildContext\/\) \|\| viewItem =~ \/canReuseBuild\//);
+        assert.match(targetMenu.when, /disconnected\|loading\|busy/);
+        assert.match(targetMenu.group, /advanced/);
+        const contextMenu = menus.find(item => item.command === `bsp.context${action}WithoutBuilding`);
+        assert.match(contextMenu.when, new RegExp(`buildContextScope.*can${action}`));
+        assert.match(contextMenu.when, /canReuseBuild/);
+        assert.match(contextMenu.group, /advanced/);
+    }
+});

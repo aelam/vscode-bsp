@@ -450,6 +450,21 @@
         "icon": "$(debug-alt)"
       },
       {
+        "command": "bsp.contextRunWithoutBuilding",
+        "title": "Run Without Building with This Context",
+        "category": "BSP"
+      },
+      {
+        "command": "bsp.contextTestWithoutBuilding",
+        "title": "Test Without Building with This Context",
+        "category": "BSP"
+      },
+      {
+        "command": "bsp.contextDebugWithoutBuilding",
+        "title": "Debug Without Building with This Context",
+        "category": "BSP"
+      },
+      {
         "command": "bsp.configureOperationContext",
         "title": "Override Shared Configuration for an Operation",
         "category": "BSP",
@@ -516,17 +531,17 @@
         },
         {
           "command": "bsp.runWithoutBuilding",
-          "when": "view == bspTargets && viewItem =~ /buildTarget.*canRun/ && !(viewItem =~ /disconnected|loading|busy/) && !(viewItem =~ /supportsBuildContext/)",
+          "when": "view == bspTargets && viewItem =~ /buildTarget.*canRun/ && !(viewItem =~ /disconnected|loading|busy/) && (!(viewItem =~ /supportsBuildContext/) || viewItem =~ /canReuseBuild/)",
           "group": "advanced@1"
         },
         {
           "command": "bsp.testWithoutBuilding",
-          "when": "view == bspTargets && viewItem =~ /buildTarget.*canTest/ && !(viewItem =~ /disconnected|loading|busy/) && !(viewItem =~ /supportsBuildContext/)",
+          "when": "view == bspTargets && viewItem =~ /buildTarget.*canTest/ && !(viewItem =~ /disconnected|loading|busy/) && (!(viewItem =~ /supportsBuildContext/) || viewItem =~ /canReuseBuild/)",
           "group": "advanced@2"
         },
         {
           "command": "bsp.debugWithoutBuilding",
-          "when": "view == bspTargets && viewItem =~ /buildTarget.*canDebug/ && !(viewItem =~ /disconnected|loading|busy/) && !(viewItem =~ /supportsBuildContext/)",
+          "when": "view == bspTargets && viewItem =~ /buildTarget.*canDebug/ && !(viewItem =~ /disconnected|loading|busy/) && (!(viewItem =~ /supportsBuildContext/) || viewItem =~ /canReuseBuild/)",
           "group": "advanced@3"
         },
         {
@@ -605,11 +620,6 @@
           "group": "configuration@1"
         },
         {
-          "command": "bsp.configureContext",
-          "when": "view == bspTargets && viewItem =~ /buildTarget.*supportsBuildContext/",
-          "group": "configuration@1"
-        },
-        {
           "command": "bsp.contextCompile",
           "when": "view == bspContexts && viewItem =~ /buildContextScope.*canCompile/",
           "group": "inline@1"
@@ -628,6 +638,21 @@
           "command": "bsp.contextDebug",
           "when": "view == bspContexts && viewItem =~ /buildContextScope.*canDebug/",
           "group": "inline@4"
+        },
+        {
+          "command": "bsp.contextRunWithoutBuilding",
+          "when": "view == bspContexts && viewItem =~ /buildContextScope.*canRun/ && viewItem =~ /canReuseBuild/",
+          "group": "advanced@1"
+        },
+        {
+          "command": "bsp.contextTestWithoutBuilding",
+          "when": "view == bspContexts && viewItem =~ /buildContextScope.*canTest/ && viewItem =~ /canReuseBuild/",
+          "group": "advanced@2"
+        },
+        {
+          "command": "bsp.contextDebugWithoutBuilding",
+          "when": "view == bspContexts && viewItem =~ /buildContextScope.*canDebug/ && viewItem =~ /canReuseBuild/",
+          "group": "advanced@3"
         },
         {
           "command": "bsp.configureOperationContext",

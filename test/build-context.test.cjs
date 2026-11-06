@@ -3,8 +3,9 @@ const { test } = require('node:test');
 const Module = require('node:module');
 const { CancellationToken, CancellationTokenSource } = require('vscode-jsonrpc/node');
 const { BuildContexts, buildContextExtension } = require('../out/buildContext');
-const accepted = operations => ({ bspExtensions: { [buildContextExtension]: {
-    version: '0.1', required: true, operations: operations ?? ['compile', 'run', 'test', 'debug']
+const accepted = (operations, buildPolicies) => ({ bspExtensions: { [buildContextExtension]: {
+    version: '0.1', required: true, operations: operations ?? ['compile', 'run', 'test', 'debug'],
+    ...(buildPolicies === undefined ? {} : { buildPolicies })
 } } });
 const id = { uri: 'target://app' };
 const target = { id, displayName: 'App', tags: [], languageIds: ['swift'], dependencies: [],
@@ -14,7 +15,8 @@ const dimension = (value = 'debug') => ({ id: 'provider.mode', label: 'Build mod
     value, options: [{ id: 'debug', label: 'Debug' }, { id: 'release', label: 'Release' }] });
 function options(value = {}) { return { dimensions: [dimension(value['provider.mode'] ?? 'debug')], selection: value }; }
 function resolved(params) { return { id: 'context-' + params.operation, operation: params.operation,
-    targets: params.scope.targets ?? [id], selection: params.selection }; }
+    targets: params.scope.targets ?? [id], selection: params.selection,
+    ...(params.buildPolicy === undefined ? {} : { buildPolicy: params.buildPolicy }) }; }
 function transport() {
     const requests = [];
     return { requests, async request(method, params) {
@@ -88,13 +90,13 @@ test('resolve captures preferences before async discovery and propagates cancell
         return resolved(params);
     });
     contexts.negotiate(accepted());
-    await contexts.setSelection(scope, 'run', { 'provider.mode': 'release' });
-    const pending = contexts.resolve(scope, 'run');
-    await contexts.setSelection(scope, 'run', { 'provider.mode': 'debug' });
+    await contexts.setSelection({}, 'run', { 'provider.mode': 'release' });
+    const pending = contexts.resolve({}, 'run');
+    await contexts.setSelection({}, 'run', { 'provider.mode': 'debug' });
     release(); await pending;
     assert.equal(calls[1].params.selection['provider.mode'], 'release');
     const source = new CancellationTokenSource();
-    const cancelled = contexts.resolve(scope, 'run', source.token);
+    const cancelled = contexts.resolve({}, 'run', source.token);
     source.cancel(); release(); await assert.rejects(cancelled, /cancelled/);
     assert.equal(calls.length, 3); assert.equal(calls[2].token, source.token);
 });
@@ -104,12 +106,13 @@ class Emitter {
     listeners = new Set(); fire(value) { for (const listener of this.listeners) { listener(value); } }
     dispose() { this.listeners.clear(); }
 }
-const notices = [], picks = [], starts = [];
+const notices = [], picks = [], starts = [], quickPicks = [];
 const disposable = () => ({ dispose() {} });
 const vscode = {
     EventEmitter: Emitter,
     TreeItem: class { constructor(label, collapsibleState) { this.label = label; this.collapsibleState = collapsibleState; } },
     TreeItemCollapsibleState: { None: 0, Collapsed: 1, Expanded: 2 }, ThemeIcon: class { constructor(id) { this.id = id; } },
+    QuickPickItemKind: { Separator: -1 },
     ProgressLocation: { Notification: 15 },
     languages: { createDiagnosticCollection: () => ({ clear() {} }) },
     workspace: { getWorkspaceFolder: () => ({ uri: { fsPath: '/workspace' } }), getConfiguration: () => ({ get: () => undefined }) },
@@ -119,7 +122,24 @@ const vscode = {
         withProgress: (_options, action) => action({ report() {} }, CancellationToken.None),
         showInformationMessage: message => notices.push(message), showErrorMessage: message => notices.push(message),
         showWarningMessage: message => notices.push(message), setStatusBarMessage() {},
-        showQuickPick: async items => { const pick = picks.shift(); assert.ok(pick, 'Unexpected picker'); return pick(items); }
+        showQuickPick: async items => { const pick = picks.shift(); assert.ok(pick, 'Unexpected picker'); return pick(items); },
+        createQuickPick: () => {
+            const accepted = new Emitter(), hidden = new Emitter();
+            const picker = { items: [], activeItems: [], selectedItems: [], disposed: false,
+                onDidAccept: accepted.event, onDidHide: hidden.event,
+                dispose() { this.disposed = true; accepted.dispose(); hidden.dispose(); },
+                show() {
+                    quickPicks.push(picker);
+                    queueMicrotask(() => {
+                        const pick = picks.shift(); assert.ok(pick, 'Unexpected picker');
+                        const selected = pick(picker.items, picker);
+                        if (selected) { picker.selectedItems = [selected]; accepted.fire(); }
+                        else { hidden.fire(); }
+                    });
+                }
+            };
+            return picker;
+        }
     }
 };
 const load = Module._load;
@@ -177,7 +197,7 @@ test('real client initialization offers the extension and keeps old servers on s
 
 test('target actions, native test selections, and F5 send the operation context without legacy flags', async () => {
     const c = client(), events = []; c.onTestEvent(event => events.push(event));
-    await c.contexts.setSelection(scope, 'run', { 'provider.mode': 'release' });
+    await c.contexts.setSelection({}, 'run', { 'provider.mode': 'release' });
     await c.run(target);
     const run = c.requests.at(-1);
     assert.equal(run.method, 'buildTarget/run'); assert.deepEqual(run.params.target, id);
@@ -217,7 +237,7 @@ function manager(clients) {
     const connections = clients.map((client, i) => ({ client, id: 'connection-' + i, connectionId: 'connection-' + i,
         connected: true, config: { name: 'Workspace ' + i, displayName: 'Workspace ' + i } }));
     return { onDidChangeConnections: changes.event, onDidUpdateTargets: updates.event,
-        getConnectedClients: () => connections, connections };
+        getConnectedClients: () => connections, connections, changes, updates };
 }
 
 test('workspace GUI shows all fields immediately, enables dependencies after Scheme, and does not preselect an operation', async () => {
@@ -227,10 +247,6 @@ test('workspace GUI shows all fields immediately, enables dependencies after Sch
         const selected = params.selection;
         const scheme = { id: 'xcode.scheme', label: 'Scheme', kind: 'enum', required: true,
             value: selected['xcode.scheme'], options: [{ id: 'A', label: 'App' }, { id: 'B', label: 'Other App' }] };
-        if (selected['xcode.scheme'] === 'B') {
-            assert.equal(selected['xcode.configuration'], undefined);
-            assert.equal(selected['xcode.destination'], undefined);
-        }
         return { selection: selected, dimensions: [scheme,
             { ...dimension(), id: 'xcode.configuration', label: 'Configuration', required: false,
                 enabled: !!selected['xcode.scheme'], reason: selected['xcode.scheme'] ? undefined : 'Select Scheme first',
@@ -258,7 +274,7 @@ test('workspace GUI shows all fields immediately, enables dependencies after Sch
     await c.contexts.setSelection({}, undefined, { 'xcode.scheme': 'A', 'xcode.configuration': 'release', 'xcode.destination': 'old' });
     picks.push(items => items.find(item => item.option?.id === 'B'));
     await provider.selectDimension(dimensions[0]);
-    assert.deepEqual(c.contexts.getSelection({}, 'run'), { 'xcode.scheme': 'B' });
+    assert.deepEqual(c.contexts.getSelection({}, 'run'), { 'xcode.scheme': 'B', 'xcode.configuration': 'release' });
     assert.deepEqual(c.contexts.getSelection(scope, 'run'), {});
     assert.ok(c.requests.every(request => request.params.operation === undefined), 'Shared configuration must not preselect an operation');
     await provider.execute(shared, 'run');
@@ -276,9 +292,9 @@ test('target configuration stays separate from workspace and equal target IDs on
     assert.deepEqual(a.contexts.getSelection(scope, 'run'), { 'provider.mode': 'release' });
     assert.deepEqual(a.contexts.getSelection({}, 'run'), {});
     assert.deepEqual(b.contexts.getSelection(scope, 'run'), {});
-    const roots = await provider.getChildren(); assert.equal(roots.length, 3);
-    const targetScope = roots.find(item => item.entry.scope.targets);
-    await provider.getChildren(targetScope);
+    const roots = await provider.getChildren(); assert.equal(roots.length, 2);
+    assert.ok(roots.every(item => !item.entry.scope.targets));
+    await provider.getChildren(roots[0]);
     assert.deepEqual(a.contexts.getSelection({}, 'run'), {}, 'Browsing must not change workspace choices');
     provider.dispose();
 });
@@ -316,10 +332,16 @@ test('a stale target configuration command cannot select a different connection'
     provider.dispose();
 });
 
-test('legacy commands cannot promise to skip builds after execution contexts are negotiated', async () => {
+test('without-building actions reject unsupported policies before preparation or requests', async () => {
     const c = client();
-    await assert.rejects(c.runWithoutBuilding(target), /Use Run Target/);
-    await assert.rejects(c.testWithoutBuilding(target), /Use Test Target/);
+    c.prepareExecutionContext = async () => { assert.fail('Unsupported reuse must not open configuration'); };
+    for (const action of [() => c.runWithoutBuilding(target), () => c.testWithoutBuilding(target),
+        () => c.debugWithoutBuilding(target)]) {
+        await assert.rejects(action(), /does not support execution without building/);
+        assert.equal(c.operations.get(id.uri), undefined);
+    }
+    c.contexts.negotiate(accepted(undefined, ['build', 'reuse']));
+    await assert.rejects(c.executeContext('compile', scope, undefined, {}, true, [], 'reuse'), /not supported for compile/);
     assert.equal(c.requests.length, 0);
 });
 
@@ -339,17 +361,17 @@ test('shared preferences are inherited while operation overrides stay explicit a
     assert.deepEqual(contexts.getSelection(scope, 'debug'), { 'provider.mode': 'release' });
 });
 
-test('changing a shared upstream dimension clears dependent operation overrides but preserves upstream choices', async () => {
-    const contexts = new BuildContexts(async (_method, params) => ({ dimensions: [], selection: params.selection }));
+test('changing shared choices retains compatible operation overrides and removes obsolete fields', async () => {
+    const contexts = new BuildContexts(async (_method, params) => dependencyOptions(params.selection));
     contexts.negotiate(accepted());
-    const dimensions = ['group', 'mode', 'device'].map(id => ({ ...dimension(), id, label: id }));
-    await contexts.setSelection(scope, undefined, { group: 'A', mode: 'release', device: 'old' });
-    await contexts.setSelection(scope, 'debug', { mode: 'debug', device: 'override', extra: 'old-session' });
-    await contexts.choose(scope, 'device', 'new', dimensions);
-    assert.deepEqual(contexts.getSelection(scope, 'debug'), { group: 'A', mode: 'debug', device: 'new' });
+    const dimensions = dependencyOptions({ group: 'A' }).dimensions;
+    await contexts.setSelection(scope, undefined, { group: 'A', mode: 'release', device: 'one' });
+    await contexts.setSelection(scope, 'debug', { mode: 'debug', device: 'two', extra: 'old-session' });
+    await contexts.choose(scope, 'device', 'two', dimensions);
+    assert.deepEqual(contexts.getSelection(scope, 'debug'), { group: 'A', mode: 'debug', device: 'two' });
     await contexts.choose(scope, 'group', 'B', dimensions);
-    assert.deepEqual(contexts.getSelection(scope, 'debug'), { group: 'B' });
-    assert.deepEqual(contexts.getSelection(scope, 'run'), { group: 'B' });
+    assert.deepEqual(contexts.getSelection(scope, 'debug'), { group: 'B', mode: 'debug', device: 'two' });
+    assert.deepEqual(contexts.getSelection(scope, 'run'), { group: 'B', mode: 'release', device: 'two' });
 });
 
 test('custom server dimensions remain generic and action buttons use scope, server, and target capabilities', async () => {
@@ -366,9 +388,8 @@ test('custom server dimensions remain generic and action buttons use scope, serv
     const limited = { ...target, capabilities: { canCompile: true, canTest: true, canRun: false, canDebug: false } };
     picks.push(() => undefined);
     await provider.configure({ connectionId: 'connection-0', buildTarget: limited });
-    const scoped = (await provider.getChildren()).find(item => item.entry.scope.targets);
-    assert.match(scoped.contextValue, /canCompile/); assert.match(scoped.contextValue, /canTest/);
-    assert.doesNotMatch(scoped.contextValue, /canRun|canDebug/);
+    assert.equal((await provider.getChildren()).length, 1);
+    const scoped = new ContextTreeItem({ ...workspace.entry, target: limited, scope: { targets: [limited.id] } });
     await assert.rejects(provider.execute(scoped, 'run'), /does not support run/);
     delete c.serverCapabilities.debugProvider;
     assert.doesNotMatch((await provider.getChildren())[0].contextValue, /canDebug/);
@@ -391,10 +412,10 @@ test('execution prompts for missing shared choices without operation-specific di
     picks.push(items => items.find(item => item.option?.id === 'tests'));
     await c.prepareDebugConfiguration(target);
     assert.equal(c.requests.at(-1).method, 'debugSession/start');
-    assert.deepEqual(c.contexts.getSelection(scope), { 'acme.profile': 'tests' });
-    assert.deepEqual(c.contexts.getSelection(scope, 'run'), { 'acme.profile': 'tests' });
+    assert.deepEqual(c.contexts.getSelection({}), { 'acme.profile': 'tests' });
+    assert.deepEqual(c.contexts.getSelection({}, 'run'), { 'acme.profile': 'tests' });
     assert.equal(c.requests.find(request => request.method === 'workspace/resolveContext').params.operation, 'debug');
-    await c.contexts.reset(scope); c.requests.length = 0;
+    await c.contexts.reset({}); c.requests.length = 0;
     picks.push(() => undefined);
     await assert.rejects(c.run(target), /cancelled/);
     assert.ok(c.requests.every(request => request.method === 'workspace/contextOptions'));
@@ -455,7 +476,8 @@ test('operation defaults returned by resolve never become saved shared choices',
     assert.ok(calls.every(call => Object.keys(call.params.selection).length === 0));
 });
 
-const { destinationDetail, contextOptionDetail, contextOptionTooltip } = require('../out/buildContextPresentation');
+const { destinationDetail, contextOptionDetail, contextOptionTooltip,
+    contextOptionPresentation, contextOptionGroups } = require('../out/buildContextPresentation');
 const destination = (kind, extra = {}) => ({ id: kind, label: kind, description: 'Server description',
     dataKind: 'execution-destination', data: { kind, platform: { id: 'vendor-platform', label: 'Example OS' }, ...extra } });
 
@@ -499,7 +521,7 @@ test('tree and picker show destination metadata without deriving action capabili
     let row = (await provider.getChildren(root))[0];
     assert.match(row.tooltip, /Example OS 18.2 · Simulator · arm64 · State: booted/);
     picks.push(items => {
-        assert.match(items.find(item => item.option?.id === 'simulator').detail, /Example OS 18.2/);
+        assert.match(items.find(item => item.option?.id === 'simulator').description, /Example OS.*18.2/);
         const unknown = items.find(item => item.option?.id === 'future-kind');
         assert.equal(unknown.label, 'future-kind'); assert.equal(unknown.description, 'Server description');
         assert.equal(unknown.detail, undefined);
@@ -512,10 +534,551 @@ test('tree and picker show destination metadata without deriving action capabili
     assert.match(row.tooltip, /Generic/);
     picks.push(items => {
         const unavailable = items.find(item => item.option?.id === 'device');
-        assert.match(unavailable.detail, /Device/); assert.match(unavailable.detail, /Reconnect the device/);
+        assert.match(unavailable.detail, /Reconnect the device/);
         return unavailable;
     });
     assert.equal(await provider.selectDimension(row), false);
     assert.equal(c.contexts.getSelection({})['vendor.destination'], 'generic');
+    provider.dispose();
+});
+
+test('selection reuses validated options and refreshes only its scope', async () => {
+    const a = client(), b = client(), connections = manager([a, b]);
+    const provider = new BuildContextProvider(connections), changed = [];
+    provider.onDidChangeTreeData(item => changed.push(item));
+    const roots = await provider.getChildren();
+    const rows = await Promise.all(roots.map(root => provider.getChildren(root)));
+    assert.deepEqual([a.requests.length, b.requests.length], [1, 1]);
+    a.requests.length = 0; b.requests.length = 0;
+    picks.push(items => items.find(item => item.option?.id === 'release'));
+    await provider.selectDimension(rows[0][0]);
+    assert.deepEqual(changed, [roots[0]]);
+    assert.deepEqual([a.requests.length, b.requests.length], [2, 0]);
+    assert.equal((await provider.getChildren(roots[0]))[0].description, 'Release');
+    await provider.getChildren(roots[1]);
+    assert.deepEqual([a.requests.length, b.requests.length], [2, 0]);
+    connections.updates.fire('connection-0');
+    assert.equal(changed.at(-1), undefined);
+    const refreshed = await provider.getChildren();
+    await Promise.all(refreshed.map(root => provider.getChildren(root)));
+    assert.deepEqual([a.requests.length, b.requests.length], [3, 1]);
+    provider.dispose();
+});
+
+test('a picker focuses the current value without saving focus changes', async () => {
+    const c = client(), provider = new BuildContextProvider(manager([c]));
+    await c.contexts.setSelection({}, undefined, { 'provider.mode': 'release' });
+    const root = (await provider.getChildren())[0], row = (await provider.getChildren(root))[0];
+    c.requests.length = 0;
+    picks.push((items, picker) => {
+        assert.equal(picker.activeItems[0].option.id, 'release');
+        picker.activeItems = [items.find(item => item.option?.id === 'debug')];
+        return undefined;
+    });
+    assert.equal(await provider.selectDimension(row), false);
+    assert.deepEqual(c.contexts.getSelection({}), { 'provider.mode': 'release' });
+    assert.equal(c.requests.length, 1);
+    assert.equal(quickPicks.at(-1).disposed, true);
+    provider.dispose();
+});
+
+test('required choices show Not selected and do not offer Automatic', async () => {
+    const c = client(), provider = new BuildContextProvider(manager([c]));
+    c.contextOptions = params => ({ selection: params.selection, dimensions: [{ ...dimension(), value: undefined }] });
+    const root = (await provider.getChildren())[0], row = (await provider.getChildren(root))[0];
+    assert.equal(row.description, 'Not selected');
+    picks.push(items => {
+        assert.ok(items.every(item => item.label !== 'Automatic'));
+        return undefined;
+    });
+    assert.equal(await provider.selectDimension(row), false);
+    provider.dispose();
+});
+
+test('Automatic clears its field, keeps compatible dependent choices, and resolves defaults when execution starts', async () => {
+    const c = client(), provider = new BuildContextProvider(manager([c]));
+    c.contextOptions = params => ({ selection: params.selection, dimensions: [
+        { ...dimension(), required: false, value: params.selection['provider.mode'] },
+        { ...dimension(), id: 'provider.device', label: 'Device', required: false, value: params.selection['provider.device'] }
+    ] });
+    await c.contexts.setSelection({}, undefined, { 'provider.mode': 'release', 'provider.device': 'release' });
+    await c.contexts.setSelection({}, 'debug', { 'provider.device': 'debug' });
+    const root = (await provider.getChildren())[0];
+    picks.push((items, picker) => {
+        assert.equal(picker.activeItems[0].option.id, 'release');
+        const automatic = items.find(item => item.label === 'Automatic');
+        assert.match(automatic.detail, /operation starts/);
+        return automatic;
+    });
+    await provider.selectDimension((await provider.getChildren(root))[0]);
+    assert.deepEqual(c.contexts.getSelection({}), { 'provider.device': 'release' });
+    assert.deepEqual(c.contexts.getSelection({}, 'debug'), { 'provider.device': 'debug' });
+    const automatic = (await provider.getChildren(root))[0];
+    assert.equal(automatic.description, 'Automatic');
+    picks.push((_items, picker) => {
+        assert.equal(picker.activeItems[0].label, 'Automatic');
+        return undefined;
+    });
+    await provider.selectDimension(automatic);
+    const send = c.connection.sendRequest;
+    c.connection.sendRequest = async (method, params, token) => {
+        const result = await send(method, params, token);
+        if (method === 'workspace/resolveContext') {
+            assert.deepEqual(params.selection, { 'provider.device': params.operation === 'debug' ? 'debug' : 'release' });
+            return { ...result, selection: { 'provider.mode': params.operation === 'run' ? 'release' : 'debug' } };
+        }
+        return result;
+    };
+    assert.equal((await c.contexts.resolve({}, 'run')).selection['provider.mode'], 'release');
+    assert.equal((await c.contexts.resolve({}, 'debug')).selection['provider.mode'], 'debug');
+    assert.deepEqual(c.contexts.getSelection({}), { 'provider.device': 'release' });
+    provider.dispose();
+});
+
+test('operation override snapshots do not replace shared tree choices', async () => {
+    const c = client(), provider = new BuildContextProvider(manager([c]));
+    await c.contexts.setSelection({}, undefined, { 'provider.mode': 'release' });
+    const root = (await provider.getChildren())[0], row = (await provider.getChildren(root))[0];
+    const changed = []; provider.onDidChangeTreeData(item => changed.push(item));
+    picks.push(items => items.find(item => item.option?.id === 'debug'));
+    await provider.selectDimension(new ContextTreeItem(root.entry, 'debug', row.dimension));
+    assert.deepEqual(changed, []);
+    assert.equal((await provider.getChildren(root))[0].description, 'Release');
+    assert.deepEqual(c.contexts.getSelection({}, 'debug'), { 'provider.mode': 'debug' });
+    assert.deepEqual(c.contexts.getSelection({}), { 'provider.mode': 'release' });
+    provider.dispose();
+});
+
+test('structured destinations keep generic choices in a final group and avoid repeated metadata', () => {
+    const host = { ...destination('host'), id: 'host', label: 'This Mac' };
+    const generic = destination('generic');
+    const simulator = { ...destination('simulator', { osVersion: '18.2', state: 'booted' }), label: 'Phone Simulator' };
+    const offline = { ...destination('device'), id: 'offline', availability: false, reason: 'Reconnect the device' };
+    const unknown = destination('future-kind');
+    const groups = contextOptionGroups([generic, simulator, offline, host, unknown]);
+    assert.deepEqual(groups.map(group => group.label), ['Devices', 'Simulators', 'Other destinations', 'Generic destinations']);
+    assert.deepEqual(groups[0].options, [host, offline]);
+    assert.deepEqual(groups[1].options, [simulator]);
+    assert.deepEqual(groups[2].options, [unknown]);
+    assert.deepEqual(groups.at(-1).options, [generic]);
+    const presentation = contextOptionPresentation(simulator);
+    assert.equal(presentation.label, 'Phone Simulator');
+    assert.match(presentation.description, /Example OS.*18.2/);
+    assert.doesNotMatch(presentation.description, /Simulator/);
+    assert.equal(presentation.detail, 'Server description · State: booted');
+    assert.equal(presentation.icon, 'vm');
+    assert.equal(contextOptionPresentation({ ...simulator, description: destinationDetail(simulator) }).detail, 'State: booted');
+    assert.deepEqual(contextOptionPresentation(unknown), {
+        label: unknown.label, description: unknown.description, detail: undefined
+    });
+    assert.match(contextOptionPresentation(offline).detail, /Reconnect/);
+});
+
+test('configuration lists contain only fields and reset, and reuse a completed choice', async () => {
+    const c = client(), provider = new BuildContextProvider(manager([c]));
+    picks.push(items => {
+        assert.ok(items.every(item => item.action === 'dimension' || item.action === 'reset'));
+        assert.ok(items.every(item => !item.label.startsWith('Execute ')));
+        return items.find(item => item.dimension);
+    });
+    picks.push(items => items.find(item => item.option?.id === 'release'));
+    picks.push(items => {
+        assert.equal(items.find(item => item.dimension).description, 'Release');
+        assert.ok(items.every(item => item.action !== 'execute'));
+        return undefined;
+    });
+    await provider.configure();
+    assert.equal(c.requests.length, 3);
+    assert.ok(c.requests.every(request => request.method === 'workspace/contextOptions'));
+    provider.dispose();
+});
+
+test('target configuration stays outside workspace roots and keeps connection preferences separate', async () => {
+    const a = client(), b = client(), provider = new BuildContextProvider(manager([a, b]), a);
+    const initial = await provider.getChildren();
+    assert.equal(initial.length, 2, 'The legacy alias must not duplicate a managed connection');
+    assert.ok(initial.every(item => item.label.includes('Workspace')));
+    const changed = []; provider.onDidChangeTreeData(item => changed.push(item));
+    for (let index = 0; index < 2; index++) {
+        picks.push(items => items.find(item => item.dimension));
+        picks.push(items => items.find(item => item.option?.id === 'release'));
+        picks.push(() => undefined);
+        await provider.configure({ connectionId: 'connection-0', buildTarget: target });
+    }
+    assert.equal((await provider.getChildren()).length, 2);
+    assert.deepEqual(changed, [], 'Target preferences must not refresh the workspace tree');
+    assert.deepEqual(a.contexts.getSelection(scope), { 'provider.mode': 'release' });
+    assert.deepEqual(a.contexts.getSelection({}), {});
+    assert.deepEqual(b.contexts.getSelection(scope), {});
+    picks.push(items => items.find(item => item.dimension));
+    picks.push(items => items.find(item => item.option?.id === 'debug'));
+    picks.push(() => undefined);
+    await provider.configure({ connectionId: 'connection-1', buildTarget: target });
+    const otherTarget = { ...target, id: { uri: 'target://other' }, displayName: 'Other' };
+    picks.push(() => undefined);
+    await provider.configure({ connectionId: 'connection-0', buildTarget: otherTarget });
+    const roots = await provider.getChildren();
+    assert.equal(roots.length, 2);
+    assert.equal(new Set(roots.map(item => item.id)).size, 2);
+    assert.equal(roots[0], initial[0]);
+    assert.deepEqual(a.contexts.getSelection(scope), { 'provider.mode': 'release' });
+    assert.deepEqual(b.contexts.getSelection(scope), { 'provider.mode': 'debug' });
+    assert.deepEqual(a.contexts.getSelection({ targets: [otherTarget.id] }), {});
+    provider.dispose();
+});
+
+test('late discovery cannot overwrite a newer choice or trigger another request', async () => {
+    const c = client(), provider = new BuildContextProvider(manager([c]));
+    const root = (await provider.getChildren())[0], row = (await provider.getChildren(root))[0];
+    let release;
+    c.contextOptions = params => new Promise(resolve => { release = () => resolve(options(params.selection)); });
+    const stale = provider.getChildren();
+    c.contextOptions = params => options(params.selection);
+    picks.push(items => items.find(item => item.option?.id === 'release'));
+    await provider.selectDimension(row);
+    const beforeRelease = c.requests.length;
+    release(); await stale;
+    assert.equal((await provider.getChildren(root))[0].description, 'Release');
+    assert.equal(c.requests.length, beforeRelease);
+    assert.deepEqual(c.contexts.getSelection({}), { 'provider.mode': 'release' });
+    provider.dispose();
+});
+
+test('refresh invalidates a pending snapshot even when preferences do not change', async () => {
+    const c = client(), provider = new BuildContextProvider(manager([c]));
+    const root = (await provider.getChildren())[0];
+    let release;
+    c.contextOptions = params => new Promise(resolve => { release = () => resolve(options(params.selection)); });
+    const stale = provider.getChildren();
+    provider.refresh();
+    c.contextOptions = params => ({ ...options(params.selection), operations: ['compile'],
+        dimensions: [{ ...dimension(), label: 'Updated mode' }] });
+    const fresh = await provider.getChildren();
+    const beforeRelease = c.requests.length;
+    release(); await stale;
+    assert.equal(fresh[0], root);
+    assert.equal((await provider.getChildren(root))[0].label, 'Updated mode');
+    assert.doesNotMatch(root.contextValue, /canRun|canTest|canDebug/);
+    assert.equal(c.requests.length, beforeRelease);
+    provider.dispose();
+});
+
+test('required defaults returned in selection appear consistently in trees and configuration lists', async () => {
+    const c = client(), provider = new BuildContextProvider(manager([c]));
+    c.contextOptions = () => ({ selection: { 'provider.mode': 'release' }, dimensions: [{ ...dimension(), value: undefined }] });
+    const root = (await provider.getChildren())[0];
+    assert.equal((await provider.getChildren(root))[0].description, 'Release');
+    picks.push(items => {
+        assert.equal(items.find(item => item.dimension).description, 'Release');
+        return undefined;
+    });
+    await provider.configure();
+    assert.deepEqual(c.contexts.getSelection({}), {}, 'Server defaults must not become explicit preferences');
+    provider.dispose();
+});
+
+test('configuration is available in Contexts without adding a Target menu entry', () => {
+    const manifest = require('../package.json');
+    const menus = manifest.contributes.menus['view/item/context'];
+    assert.ok(menus.some(item => item.command === 'bsp.configureContext' && item.when.includes('bspContexts')));
+    assert.ok(menus.every(item => item.command !== 'bsp.configureContext' || !item.when.includes('bspTargets')));
+    assert.ok(manifest.contributes.commands.some(item => item.command === 'bsp.configureContext'));
+});
+
+test('target execution projects only shared workspace fields and preserves the requested target', async () => {
+    const calls = [], contexts = new BuildContexts(async (method, params) => {
+        calls.push({ method, params });
+        if (method === 'workspace/resolveContext') { return resolved(params); }
+        if (!params.scope.targets) {
+            assert.deepEqual(params.selection, {}, 'Schema discovery must ignore stale workspace-only preferences');
+            return { selection: {}, operations: ['run'], dimensions: [
+                { ...dimension(), required: false }, { ...dimension(), id: 'vendor.workspaceTarget', label: 'Target' }
+            ] };
+        }
+        assert.equal(params.selection['vendor.workspaceTarget'], undefined);
+        return { selection: params.selection, operations: ['test'], dimensions: [{ ...dimension(), required: false }] };
+    });
+    contexts.negotiate(accepted());
+    await contexts.setSelection({}, undefined, { 'provider.mode': 'release', 'vendor.workspaceTarget': 'removed-target' });
+    await contexts.setSelection(scope, undefined, { 'provider.mode': 'debug' });
+    const result = await contexts.resolve(scope, 'test');
+    assert.deepEqual(result.targets, [id]);
+    assert.deepEqual(result.selection, { 'provider.mode': 'release' });
+    assert.deepEqual(calls.at(-1).params.scope, scope);
+    assert.deepEqual(contexts.getSelection(scope), { 'provider.mode': 'debug' }, 'Projection must not rewrite saved preferences');
+    await contexts.reset({});
+    const automatic = await contexts.resolve(scope, 'test');
+    assert.deepEqual(automatic.selection, {}, 'Automatic must not revive the old target override');
+});
+
+test('workspace operation preferences remain isolated by operation and connection during target execution', async () => {
+    const a = new BuildContexts(transport().request), b = new BuildContexts(transport().request);
+    a.negotiate(accepted()); b.negotiate(accepted());
+    await a.setSelection({}, undefined, { 'provider.mode': 'release' });
+    await a.setSelection({}, 'debug', { 'provider.mode': 'debug' });
+    assert.equal((await a.resolve(scope, 'run')).selection['provider.mode'], 'release');
+    assert.equal((await a.resolve(scope, 'debug')).selection['provider.mode'], 'debug');
+    assert.deepEqual((await b.resolve(scope, 'run')).selection, {});
+});
+
+test('incompatible shared choices reject target execution instead of using its default', async () => {
+    const calls = [], contexts = new BuildContexts(async (method, params) => {
+        calls.push(method);
+        if (method === 'workspace/resolveContext') { return resolved(params); }
+        const incompatible = params.scope.targets && params.selection['provider.mode'] === 'release';
+        return { selection: params.selection, operations: ['run'], dimensions: [{ ...dimension(), required: false,
+            options: [dimension().options[0], { id: 'release', label: 'Release', availability: !incompatible,
+                reason: incompatible ? 'Release cannot run on this target' : undefined }] }] };
+    });
+    contexts.negotiate(accepted());
+    await contexts.setSelection({}, undefined, { 'provider.mode': 'release' });
+    await assert.rejects(contexts.resolve(scope, 'run'), /Release cannot run/);
+    assert.ok(calls.every(method => method === 'workspace/contextOptions'));
+});
+
+test('target-only required choices prompt in the target scope while shared choices stay in Contexts', async () => {
+    const c = client(), provider = new BuildContextProvider(manager([c]));
+    c.contextOptions = params => ({ selection: params.selection, dimensions: [
+        { ...dimension(), required: false }, ...(params.scope.targets ? [{ ...dimension(), id: 'vendor.targetRuntime',
+            label: 'Runtime', value: params.selection['vendor.targetRuntime'] }] : [])
+    ] });
+    await c.contexts.setSelection({}, undefined, { 'provider.mode': 'release' });
+    picks.push(items => items.find(item => item.option?.id === 'debug'));
+    await c.prepareDebugConfiguration(target);
+    const resolvedRequest = c.requests.find(request => request.method === 'workspace/resolveContext');
+    assert.deepEqual(resolvedRequest.params.selection, { 'provider.mode': 'release', 'vendor.targetRuntime': 'debug' });
+    assert.deepEqual(c.contexts.getSelection({}), { 'provider.mode': 'release' });
+    assert.deepEqual(c.contexts.getSelection(scope, 'debug'), { 'vendor.targetRuntime': 'debug' });
+    assert.equal((await provider.getChildren()).length, 1);
+    provider.dispose();
+});
+
+test('destination identifiers appear in the detail line without guessing opaque option IDs', async () => {
+    const simulator = destination('simulator', { identifier: { label: 'UDID', value: 'SIMULATOR-UUID' }, osVersion: '18.2' });
+    const device = destination('device', { identifier: { label: 'Serial', value: 'DEVICE-123' } });
+    assert.match(contextOptionPresentation(simulator).detail, /^UDID: SIMULATOR-UUID/);
+    assert.match(contextOptionPresentation(device).detail, /^Serial: DEVICE-123/);
+    assert.doesNotMatch(contextOptionPresentation(destination('generic')).detail, /UDID/);
+    const c = client(), provider = new BuildContextProvider(manager([c]));
+    c.contextOptions = params => ({ selection: params.selection, dimensions: [{ ...dimension(), id: 'vendor.destination',
+        label: 'Destination', required: false, value: params.selection['vendor.destination'],
+        options: [destination('generic'), simulator, { ...device, availability: false, reason: 'Offline' }, destination('host')] }] });
+    const root = (await provider.getChildren())[0];
+    picks.push(items => {
+        assert.deepEqual(items.filter(item => item.kind === vscode.QuickPickItemKind.Separator).map(item => item.label),
+            ['Devices', 'Simulators', 'Generic destinations']);
+        const row = items.find(item => item.option?.id === 'simulator');
+        assert.equal(row.label, 'simulator');
+        assert.match(row.description, /Example OS.*18.2/);
+        assert.match(row.detail, /^UDID: SIMULATOR-UUID/);
+        assert.match(row.detail, /Server description/);
+        return undefined;
+    });
+    await provider.selectDimension((await provider.getChildren(root))[0]);
+    provider.dispose();
+});
+
+function dependencyOptions(selection) {
+    const choice = (id, values, extra = {}) => ({ id, label: id, kind: 'enum', required: id === 'group',
+        options: values.map(value => ({ id: value, label: value })), ...extra });
+    const group = selection.group ?? 'A';
+    const dimensions = [choice('group', ['A', 'B', 'C', 'D']),
+        choice('mode', group === 'C' ? ['debug'] : ['debug', 'release'], { enabled: group !== 'D' }),
+        ...(group === 'D' ? [] : [choice('device', group === 'C' ? ['three'] : ['one', 'two'])])];
+    for (const [id, value] of Object.entries(selection)) {
+        const dimension = dimensions.find(item => item.id === id);
+        assert.ok(dimension && dimension.enabled !== false && dimension.options.some(option => option.id === value),
+            `The client sent an invalid dependent choice: ${id}=${value}`);
+    }
+    return { dimensions, selection };
+}
+
+test('upstream changes preserve compatible choices in dependency order without saving defaults', async () => {
+    const requests = [], contexts = new BuildContexts(async (_method, params) => {
+        requests.push(structuredClone(params.selection)); return dependencyOptions(params.selection);
+    });
+    contexts.negotiate(accepted());
+    const original = { group: 'A', mode: 'release', device: 'one' };
+    await contexts.setSelection(scope, undefined, original);
+    const dimensions = dependencyOptions(original).dimensions;
+    await contexts.choose(scope, 'group', 'B', dimensions);
+    assert.deepEqual(requests, [{ group: 'B' }, { group: 'B', mode: 'release' }, { group: 'B', mode: 'release', device: 'one' }]);
+    assert.deepEqual(contexts.getSelection(scope), { group: 'B', mode: 'release', device: 'one' });
+    requests.length = 0;
+    await contexts.choose(scope, 'group', 'B', dimensions);
+    assert.equal(requests.length, 1, 'Choosing the same value must validate once without resetting dependencies');
+    assert.deepEqual(contexts.getSelection(scope), { group: 'B', mode: 'release', device: 'one' });
+    requests.length = 0;
+    await contexts.choose(scope, 'device', 'two', dimensions);
+    assert.equal(requests.length, 1, 'Changing the last dimension needs one validation request');
+    assert.deepEqual(contexts.getSelection(scope), { group: 'B', mode: 'release', device: 'two' });
+});
+
+test('unavailable, disabled, and removed dependent choices are cleared without sending invalid selections', async () => {
+    const contexts = new BuildContexts(async (_method, params) => dependencyOptions(params.selection));
+    contexts.negotiate(accepted());
+    const original = { group: 'A', mode: 'release', device: 'one' };
+    const dimensions = dependencyOptions(original).dimensions;
+    await contexts.setSelection(scope, undefined, original);
+    await contexts.choose(scope, 'group', 'C', dimensions);
+    assert.deepEqual(contexts.getSelection(scope), { group: 'C' });
+    await contexts.setSelection(scope, undefined, original);
+    await contexts.choose(scope, 'group', 'D', dimensions);
+    assert.deepEqual(contexts.getSelection(scope), { group: 'D' });
+});
+
+test('Automatic retains compatible downstream values and does not materialize a server default', async () => {
+    const requests = [], contexts = new BuildContexts(async (_method, params) => {
+        requests.push(structuredClone(params.selection));
+        const options = dependencyOptions(params.selection);
+        options.dimensions.find(item => item.id === 'mode').value = params.selection.mode ?? 'debug';
+        return options;
+    });
+    contexts.negotiate(accepted());
+    const original = { group: 'A', mode: 'release', device: 'one' };
+    await contexts.setSelection(scope, undefined, original);
+    await contexts.choose(scope, 'mode', undefined, dependencyOptions(original).dimensions);
+    assert.deepEqual(requests, [{ group: 'A' }, { group: 'A', device: 'one' }]);
+    assert.deepEqual(contexts.getSelection(scope), { group: 'A', device: 'one' });
+});
+
+test('failed or cancelled compatibility validation leaves shared and operation preferences unchanged', async () => {
+    for (const cancelled of [false, true]) {
+        const source = new CancellationTokenSource();
+        const contexts = new BuildContexts(async (_method, params) => {
+            if (params.selection.group === 'B' && params.selection.mode === 'release') {
+                if (cancelled) { source.cancel(); } else { throw new Error('Discovery failed'); }
+            }
+            return dependencyOptions(params.selection);
+        });
+        contexts.negotiate(accepted());
+        const original = { group: 'A', mode: 'release', device: 'one' };
+        await contexts.setSelection(scope, undefined, original);
+        await contexts.setSelection(scope, 'debug', { mode: 'debug', device: 'two' });
+        await assert.rejects(contexts.choose(scope, 'group', 'B', dependencyOptions(original).dimensions, undefined, source.token),
+            cancelled ? /cancelled/ : /Discovery failed/);
+        assert.deepEqual(contexts.getSelection(scope), original);
+        assert.deepEqual(contexts.getSelection(scope, 'debug'), { group: 'A', mode: 'debug', device: 'two' });
+    }
+});
+
+test('capability reduction leaves inactive operation overrides out of shared choice validation', async () => {
+    const server = transport(), contexts = new BuildContexts(server.request);
+    contexts.negotiate(accepted());
+    await contexts.setSelection(scope, 'debug', { 'provider.mode': 'release' });
+    contexts.negotiate(accepted(['compile']));
+    await contexts.choose(scope, 'provider.mode', 'debug', [dimension()]);
+    assert.deepEqual(contexts.getSelection(scope), { 'provider.mode': 'debug' });
+    assert.deepEqual(contexts.getSelection(scope, 'debug'), { 'provider.mode': 'release' });
+    assert.equal(server.requests.length, 1);
+    assert.equal(server.requests[0].method, 'workspace/contextOptions');
+});
+
+
+test('reuse requires a valid advertised capability and is reset on negotiation or disconnect', () => {
+    const contexts = new BuildContexts(transport().request);
+    contexts.negotiate(accepted()); assert.equal(contexts.supportsReuse, false);
+    contexts.negotiate(accepted(undefined, ['build'])); assert.equal(contexts.supportsReuse, false);
+    contexts.negotiate(accepted(undefined, ['build', 'reuse'])); assert.equal(contexts.supportsReuse, true);
+    contexts.negotiate(accepted()); assert.equal(contexts.supportsReuse, false);
+    for (const malformed of ['reuse', null, [], ['reuse'], [true], ['future']]) {
+        contexts.negotiate(accepted(undefined, ['build', 'reuse']));
+        assert.throws(() => contexts.negotiate(accepted(undefined, malformed)), /invalid build context capability/);
+        assert.equal(contexts.supportsReuse, false);
+        assert.equal(contexts.enabled, false);
+    }
+    contexts.negotiate(accepted(undefined, ['build', 'reuse']));
+    contexts.disconnect(); assert.equal(contexts.supportsReuse, false);
+});
+
+test('reuse run, test, and debug freeze policy at resolution and execute with only the context ID', async () => {
+    for (const operation of ['run', 'test', 'debug']) {
+        const c = client(), events = [], source = new CancellationTokenSource();
+        c.contexts.negotiate(accepted(undefined, ['build', 'reuse']));
+        c.onTestEvent(event => events.push(event));
+        const testTarget = { ...target, capabilities: { ...target.capabilities, canRun: false } };
+        const noticesBefore = notices.length;
+        if (operation === 'run') { await c.runWithoutBuilding(target); }
+        else if (operation === 'test') {
+            await c.testWithoutBuilding(target, { native: true, token: source.token,
+                selection: { dataKind: 'test-cases', data: { ids: ['case-1'] } } });
+        } else { await c.debugWithoutBuilding(testTarget); }
+        const resolve = c.requests.find(request => request.method === 'workspace/resolveContext');
+        assert.equal(resolve.params.buildPolicy, 'reuse');
+        assert.equal(resolve.params.operation, operation);
+        const execute = c.requests.at(-1);
+        assert.equal(execute.method, operation === 'debug' ? 'debugSession/start' : `buildTarget/${operation}`);
+        assert.deepEqual(execute.params.executionContext, { id: 'context-' + operation });
+        assert.equal(Object.hasOwn(execute.params, 'buildPolicy'), false);
+        assert.equal(Object.hasOwn(execute.params, 'arguments'), false);
+        assert.ok(!c.requests.some(request => request.method === 'buildTarget/compile'));
+        for (const request of c.requests.filter(request => request.method === 'workspace/contextOptions')) {
+            assert.equal(Object.hasOwn(request.params, 'operation'), false);
+            assert.equal(Object.hasOwn(request.params, 'buildPolicy'), false);
+            assert.deepEqual(Object.keys(request.params).sort(), ['scope', 'selection']);
+        }
+        if (operation === 'test') {
+            assert.deepEqual(execute.params.data, { ids: ['case-1'] });
+            assert.equal(execute.params.dataKind, 'test-cases');
+            assert.deepEqual(events.map(event => event.kind), ['started', 'finished']);
+            assert.equal(notices.length, noticesBefore, 'Native tests must not show a second result');
+        } else if (operation === 'debug') { assert.equal(starts.at(-1).stopOnEntry, false); }
+        assert.deepEqual(c.contexts.getSelection(scope, operation), {}, 'Policies are not saved as preferences');
+        source.dispose();
+    }
+});
+
+test('reuse rejects a missing or different server policy without executing or falling back', async () => {
+    for (const policy of [undefined, 'build', null, 'future']) {
+        const c = client();
+        c.contexts.negotiate(accepted(undefined, ['build', 'reuse']));
+        const send = c.connection.sendRequest;
+        c.connection.sendRequest = async (method, params, token) => {
+            const result = await send(method, params, token);
+            if (method === 'workspace/resolveContext') {
+                delete result.buildPolicy;
+                if (policy !== undefined) { result.buildPolicy = policy; }
+            }
+            return result;
+        };
+        await assert.rejects(c.runWithoutBuilding(target), /does not match the requested build policy/);
+        assert.ok(c.requests.every(request => request.method.startsWith('workspace/')));
+        assert.equal(c.operations.get(id.uri), undefined);
+    }
+});
+
+test('normal execution omits the policy and accepts old responses as build', async () => {
+    const c = client();
+    c.contexts.negotiate(accepted(undefined, ['build', 'reuse']));
+    await c.run(target);
+    const resolution = c.requests.find(request => request.method === 'workspace/resolveContext');
+    assert.equal(Object.hasOwn(resolution.params, 'buildPolicy'), false);
+    assert.equal(c.requests.at(-1).method, 'buildTarget/run');
+    c.requests.length = 0;
+    const send = c.connection.sendRequest;
+    c.connection.sendRequest = async (method, params, token) => {
+        const result = await send(method, params, token);
+        return method === 'workspace/resolveContext' ? { ...result, buildPolicy: 'reuse' } : result;
+    };
+    await assert.rejects(c.run(target), /does not match the requested build policy/);
+    assert.ok(c.requests.every(request => request.method.startsWith('workspace/')));
+});
+
+test('Contexts scope reuse actions follow negotiation and preserve standard capabilities', async () => {
+    const c = client(), provider = new BuildContextProvider(manager([c]));
+    const root = (await provider.getChildren())[0];
+    assert.doesNotMatch(root.contextValue, /canReuseBuild/);
+    c.requests.length = 0;
+    await assert.rejects(provider.execute(root, 'run', 'reuse'), /does not support execution without building/);
+    assert.equal(c.requests.length, 0);
+    c.contexts.negotiate(accepted(undefined, ['build', 'reuse']));
+    assert.match((await provider.getChildren())[0].contextValue, /canReuseBuild/);
+    await provider.execute(root, 'run', 'reuse');
+    assert.equal(c.requests.findLast(request => request.method === 'workspace/resolveContext').params.buildPolicy, 'reuse');
+    assert.deepEqual(c.requests.at(-1).params.executionContext, { id: 'context-run' });
+    c.contextOptions = params => ({ ...options(params.selection), operations: ['compile'] });
+    const limited = (await provider.getChildren())[0];
+    assert.doesNotMatch(limited.contextValue, /canRun|canTest|canDebug/);
+    await assert.rejects(provider.execute(limited, 'run', 'reuse'), /does not support run/);
     provider.dispose();
 });

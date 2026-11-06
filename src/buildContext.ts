@@ -4,6 +4,7 @@ import type { BuildTargetIdentifier } from './bspTypes';
 export const buildContextExtension = 'vscode-bsp.build-context';
 export const buildContextVersion = '0.1';
 export type ContextOperation = 'compile' | 'run' | 'test' | 'debug';
+export type ContextBuildPolicy = 'build' | 'reuse';
 export const contextOperations: ContextOperation[] = ['compile', 'run', 'test', 'debug'];
 export interface ContextScope { workspaceUri?: string; targets?: BuildTargetIdentifier[] }
 export type ContextSelection = Record<string, string>;
@@ -20,6 +21,7 @@ export interface ContextDimension {
 export interface ContextOptions { dimensions: ContextDimension[]; selection: ContextSelection; operations?: ContextOperation[] }
 export interface ResolvedContext {
     id: string; operation: ContextOperation; targets: BuildTargetIdentifier[]; selection: ContextSelection;
+    buildPolicy?: ContextBuildPolicy;
 }
 export type ContextRequest = <T>(method: string, params: unknown, token: CancellationToken) => Promise<T>;
 export interface ContextPreferenceStorage {
@@ -39,6 +41,7 @@ function selection(value: unknown): value is ContextSelection {
 // Preferences belong to one client connection. Resolved contexts never enter this store.
 export class BuildContexts {
     private accepted = false;
+    private reuseBuild = false;
     private available: ContextOperation[] = [];
     private preferences = new Map<string, ContextPreferences>();
     private storage?: ContextPreferenceStorage;
@@ -63,22 +66,37 @@ export class BuildContexts {
     }
 
     get enabled(): boolean { return this.accepted; }
+    get supportsReuse(): boolean { return this.accepted && this.reuseBuild; }
     get operations(): readonly ContextOperation[] { return this.available; }
 
     negotiate(data: unknown): void {
         this.available = [];
         this.accepted = false;
+        this.reuseBuild = false;
         const descriptor = object(object(object(data)?.bspExtensions)?.[buildContextExtension]);
         if (descriptor?.version !== buildContextVersion) { return; }
         if (descriptor.required !== true || !Array.isArray(descriptor.operations)
-            || !descriptor.operations.every(op => contextOperations.includes(op as ContextOperation))) {
+            || !descriptor.operations.every(op => contextOperations.includes(op as ContextOperation))
+            || (descriptor.buildPolicies !== undefined && (!Array.isArray(descriptor.buildPolicies)
+                || !descriptor.buildPolicies.includes('build')
+                || !descriptor.buildPolicies.every(policy => policy === 'build' || policy === 'reuse')))) {
             throw new Error('The server returned an invalid build context capability');
         }
         this.available = [...new Set(descriptor.operations as ContextOperation[])];
+        this.reuseBuild = Array.isArray(descriptor.buildPolicies) && descriptor.buildPolicies.includes('reuse');
         this.accepted = true;
     }
 
-    disconnect(): void { this.available = []; this.accepted = false; }
+    disconnect(): void { this.available = []; this.accepted = false; this.reuseBuild = false; }
+
+    requireBuildPolicy(operation: ContextOperation, policy: ContextBuildPolicy): void {
+        this.require(operation);
+        if (policy === 'build') { return; }
+        if (policy !== 'reuse' || operation === 'compile') {
+            throw new Error(`Build policy ${policy} is not supported for ${operation}`);
+        }
+        if (!this.supportsReuse) { throw new Error('This server does not support execution without building'); }
+    }
 
     getSelection(scope: ContextScope, operation?: ContextOperation): ContextSelection {
         const value = { ...this.preferences.get(this.key(scope)),
@@ -111,33 +129,112 @@ export class BuildContexts {
     }
 
     async choose(scope: ContextScope, dimension: string, option: string | undefined,
-        dimensions: ContextDimension[], operation?: ContextOperation, token = CancellationToken.None): Promise<void> {
+        dimensions: ContextDimension[], operation?: ContextOperation, token = CancellationToken.None): Promise<ContextOptions> {
         const position = dimensions.findIndex(item => item.id === dimension);
         if (position < 0) { throw new Error('This configuration option is no longer available'); }
         const before = new Set(dimensions.slice(0, position).map(item => item.id));
-        const explicit = this.preferences.get(this.key(scope, operation)) ?? {};
-        const value: ContextPreferences = Object.fromEntries(Object.entries(explicit).filter(([key]) => before.has(key)));
-        const shared = this.getSelection(scope);
-        if (operation) {
-            for (const item of dimensions.slice(position)) {
-                if (Object.prototype.hasOwnProperty.call(shared, item.id)) { value[item.id] = null; }
-            }
-        }
-        if (option !== undefined) { Object.defineProperty(value, dimension, { value: option, enumerable: true, configurable: true }); }
-        const combined = operation ? { ...shared, ...value } : value;
-        const effective = Object.fromEntries(Object.entries(combined).filter((entry): entry is [string, string] => entry[1] !== null));
-        await this.options(scope, operation, effective, token);
-        if (token.isCancellationRequested) { throw new Error('Configuration selection cancelled'); }
-        this.preferences.set(this.key(scope, operation), value);
+        const known = new Set(dimensions.map(item => item.id));
+        const key = this.key(scope, operation), shared = operation ? this.getSelection(scope) : {};
+        const proposed: ContextPreferences = Object.fromEntries(Object.entries(this.preferences.get(key) ?? {})
+            .filter(([id]) => known.has(id)));
+        const previous = this.getSelection(scope, operation);
+        delete proposed[dimension];
+        if (option !== undefined) {
+            Object.defineProperty(proposed, dimension, { value: option, enumerable: true, configurable: true });
+        } else if (operation && Object.prototype.hasOwnProperty.call(shared, dimension)) { proposed[dimension] = null; }
+        const candidates = this.combine(shared, proposed);
+        const prefix = Object.fromEntries(Object.entries(candidates).filter(([id]) => before.has(id) || id === dimension));
+        const checked = previous[dimension] === option
+            ? { selection: candidates, options: await this.checkedOptions(scope, operation, candidates, token) }
+            : await this.retainCompatible(scope, operation, prefix, candidates, new Set([dimension]), shared, proposed, token);
+        const updates = new Map<string, ContextPreferences>([[key,
+            this.explicitPreferences(shared, proposed, checked.selection, checked.options)]]);
         if (!operation) {
-            // Shared choices invalidate dependent overrides in each operation.
-            for (const op of contextOperations) {
-                const key = this.key(scope, op), overrides = this.preferences.get(key);
-                if (overrides) { this.preferences.set(key,
-                    Object.fromEntries(Object.entries(overrides).filter(([id]) => before.has(id)))); }
+            await Promise.all(contextOperations.map(async op => {
+                const overrideKey = this.key(scope, op), overrides = this.preferences.get(overrideKey);
+                if (!this.available.includes(op) || !overrides || !Object.keys(overrides).length) { return; }
+                const effective = this.combine(checked.selection, overrides);
+                const first = checked.options.dimensions.findIndex(item => Object.prototype.hasOwnProperty.call(overrides, item.id));
+                if (first < 0) { updates.set(overrideKey, {}); return; }
+                const upstream = new Set(checked.options.dimensions.slice(0, first).map(item => item.id));
+                const inheritedPrefix = Object.fromEntries(Object.entries(effective).filter(([id]) => upstream.has(id)));
+                const validated = await this.retainCompatible(scope, op, inheritedPrefix, effective, new Set(),
+                    checked.selection, overrides, token);
+                updates.set(overrideKey, this.explicitPreferences(checked.selection, overrides, validated.selection, validated.options));
+            }));
+        }
+        if (token.isCancellationRequested) { throw new Error('Configuration selection cancelled'); }
+        const old = new Map([...updates.keys()].map(id => [id, this.preferences.get(id)]));
+        for (const [id, value] of updates) { this.preferences.set(id, value); }
+        try { await this.save(); }
+        catch (error) {
+            for (const [id, value] of old) {
+                if (this.preferences.get(id) !== updates.get(id)) { continue; }
+                if (value) { this.preferences.set(id, value); } else { this.preferences.delete(id); }
+            }
+            throw error;
+        }
+        return checked.options;
+    }
+
+    private combine(shared: ContextSelection, explicit: ContextPreferences): ContextSelection {
+        return Object.fromEntries(Object.entries({ ...shared, ...explicit })
+            .filter((entry): entry is [string, string] => entry[1] !== null));
+    }
+
+    private availableOption(options: ContextOptions, id: string, value: string): boolean {
+        const dimension = options.dimensions.find(item => item.id === id);
+        return dimension?.kind === 'enum' && dimension.enabled !== false
+            && dimension.options.some(option => option.id === value && option.availability !== false);
+    }
+
+    private async checkedOptions(scope: ContextScope, operation: ContextOperation | undefined,
+        value: ContextSelection, token: CancellationToken): Promise<ContextOptions> {
+        const options = await this.options(scope, operation, value, token);
+        if (token.isCancellationRequested) { throw new Error('Configuration selection cancelled'); }
+        for (const [id, selected] of Object.entries(value)) {
+            if (this.availableOption(options, id, selected)) { continue; }
+            const dimension = options.dimensions.find(item => item.id === id);
+            const option = dimension?.options.find(item => item.id === selected);
+            throw new Error(option?.reason ?? dimension?.reason ?? `The selected ${dimension?.label ?? id} is unavailable`);
+        }
+        return options;
+    }
+
+    private async retainCompatible(scope: ContextScope, operation: ContextOperation | undefined,
+        prefix: ContextSelection, candidates: ContextSelection, skipped: Set<string>, shared: ContextSelection,
+        explicit: ContextPreferences, token: CancellationToken): Promise<{ selection: ContextSelection; options: ContextOptions }> {
+        const selection = { ...prefix }, processed = new Set([...Object.keys(prefix), ...skipped]);
+        let options = await this.checkedOptions(scope, operation, selection, token);
+        while (true) {
+            const dimension = options.dimensions.find(item => !processed.has(item.id)
+                && Object.prototype.hasOwnProperty.call(candidates, item.id));
+            if (!dimension) { break; }
+            processed.add(dimension.id);
+            let value = candidates[dimension.id];
+            if (!this.availableOption(options, dimension.id, value)) {
+                if (!Object.prototype.hasOwnProperty.call(explicit, dimension.id) || explicit[dimension.id] === null
+                    || !Object.prototype.hasOwnProperty.call(shared, dimension.id)
+                    || !this.availableOption(options, dimension.id, shared[dimension.id])) { continue; }
+                value = shared[dimension.id];
+            }
+            Object.defineProperty(selection, dimension.id, { value, enumerable: true, configurable: true });
+            options = await this.checkedOptions(scope, operation, selection, token);
+        }
+        return { selection, options };
+    }
+
+    private explicitPreferences(shared: ContextSelection, proposed: ContextPreferences,
+        selected: ContextSelection, options: ContextOptions): ContextPreferences {
+        const known = new Set(options.dimensions.map(item => item.id));
+        const result: ContextPreferences = Object.fromEntries(Object.entries(proposed).filter(([id, value]) =>
+            known.has(id) && (value === null || selected[id] === value)));
+        for (const id of Object.keys(shared)) {
+            if (!Object.prototype.hasOwnProperty.call(selected, id)) {
+                Object.defineProperty(result, id, { value: null, enumerable: true, configurable: true });
             }
         }
-        await this.save();
+        return result;
     }
 
     async reset(scope: ContextScope, operation?: ContextOperation): Promise<void> {
@@ -146,11 +243,38 @@ export class BuildContexts {
         await this.save();
     }
 
-    async resolve(scope: ContextScope, operation: ContextOperation,
-        token = CancellationToken.None): Promise<ResolvedContext> {
+    async executionOptions(scope: ContextScope, operation: ContextOperation, token = CancellationToken.None): Promise<{
+        options: ContextOptions; selection: ContextSelection; sharedScope: ContextScope; sharedDimensions: string[];
+    }> {
         this.require(operation);
         const value = this.getSelection(scope, operation);
+        if (!scope.targets) {
+            const options = await this.options(scope, operation, value, token);
+            return { options, selection: value, sharedScope: scope, sharedDimensions: options.dimensions.map(item => item.id) };
+        }
+        const sharedScope: ContextScope = scope.workspaceUri ? { workspaceUri: scope.workspaceUri } : {};
+        const shared = this.getSelection(sharedScope, operation);
+        const [workspaceSchema, targetSchema] = await Promise.all([
+            this.options(sharedScope, operation, {}, token), this.options(scope, operation, {}, token)
+        ]);
+        if (token.isCancellationRequested) { throw new Error('Build context resolution cancelled'); }
+        const targetDimensions = new Set(targetSchema.dimensions.map(item => item.id));
+        const sharedDimensions = workspaceSchema.dimensions.map(item => item.id).filter(id => targetDimensions.has(id));
+        // Workspace choices own shared fields. Omitted values keep Automatic and clear old target overrides.
+        for (const id of sharedDimensions) {
+            delete value[id];
+            if (Object.prototype.hasOwnProperty.call(shared, id)) {
+                Object.defineProperty(value, id, { value: shared[id], enumerable: true, configurable: true });
+            }
+        }
         const options = await this.options(scope, operation, value, token);
+        return { options, selection: value, sharedScope, sharedDimensions };
+    }
+
+    async resolve(scope: ContextScope, operation: ContextOperation,
+        token = CancellationToken.None, buildPolicy: ContextBuildPolicy = 'build'): Promise<ResolvedContext> {
+        this.requireBuildPolicy(operation, buildPolicy);
+        const { options, selection: value } = await this.executionOptions(scope, operation, token);
         for (const dimension of options.dimensions) {
             if (dimension.kind !== 'enum') {
                 if (dimension.required || value[dimension.id] !== undefined) {
@@ -174,9 +298,12 @@ export class BuildContexts {
                 throw new Error(option?.reason ?? `The selected ${dimension.label} is unavailable`);
             }
         }
+        if (options.operations && !options.operations.includes(operation)) {
+            throw new Error(`This configuration does not support ${operation}`);
+        }
         if (token.isCancellationRequested) { throw new Error('Build context resolution cancelled'); }
         const result = await this.request<ResolvedContext>('workspace/resolveContext', {
-            scope, operation, selection: value
+            scope, operation, selection: value, ...(buildPolicy === 'reuse' ? { buildPolicy } : {})
         }, token);
         if (!result || typeof result.id !== 'string' || !result.id || result.operation !== operation
             || !selection(result.selection) || !Array.isArray(result.targets) || !result.targets.length
@@ -184,6 +311,9 @@ export class BuildContexts {
             || new Set(result.targets.map(target => target.uri)).size !== result.targets.length
             || (operation === 'run' && result.targets.length !== 1)) {
             throw new Error('The server returned an invalid resolved build context');
+        }
+        if ((result.buildPolicy ?? 'build') !== buildPolicy || result.buildPolicy === null) {
+            throw new Error('The resolved build context does not match the requested build policy');
         }
         if (scope.targets && JSON.stringify(scope.targets.map(t => t.uri).sort())
             !== JSON.stringify(result.targets.map(t => t.uri).sort())) {

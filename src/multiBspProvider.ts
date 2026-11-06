@@ -296,7 +296,8 @@ export class MultiBspProvider implements vscode.TreeDataProvider<BspTreeItem> {
                     canTest: connection.client.supportsOperation('test', target),
                     canDebug: connection.client.supportsOperation('debug', target)
                 };
-                element.contextValue = this.getBuildTargetContextValue({ ...target, capabilities }) + favorite + ' supportsBuildContext';
+                element.contextValue = this.getBuildTargetContextValue({ ...target, capabilities }) + favorite + ' supportsBuildContext'
+                    + (connection.client.contexts.supportsReuse ? ' canReuseBuild' : '');
             }
             if (!connection.client.cleanCacheBlockedReason) { element.contextValue += ' canCleanCache'; }
             element.description = this.getBuildTargetDescription(target);
@@ -444,13 +445,8 @@ export class MultiBspProvider implements vscode.TreeDataProvider<BspTreeItem> {
         // Capabilities are now shown via enabled/disabled buttons, no need to show as children
 
         // Add build system configuration if supported
-        if (element.connectionId && this.connectionManager.getConnection(element.connectionId)?.client.contexts?.enabled) {
-            const contextItem = new BspTreeItem('Execution Configuration', vscode.TreeItemCollapsibleState.None, 'buildConfig');
-            contextItem.connectionId = element.connectionId;
-            contextItem.buildTarget = target;
-            contextItem.command = { command: 'bsp.configureContext', title: 'Configure Execution Context', arguments: [contextItem] };
-            children.push(contextItem);
-        } else if (this.buildSystemManager.canHandle(target)) {
+        const usesContexts = element.connectionId && this.connectionManager.getConnection(element.connectionId)?.client.contexts?.enabled;
+        if (!usesContexts && this.buildSystemManager.canHandle(target)) {
             const buildSettingsDesc = this.buildSystemManager.getBuildSettingsDescription(target);
             if (buildSettingsDesc) {
                 children.push(new BspTreeItem(

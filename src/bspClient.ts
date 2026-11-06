@@ -1,5 +1,5 @@
 import { BspStdio } from './bspStdio';
-import { BuildContexts, buildContextExtension, buildContextVersion, ContextOperation, ContextScope, ContextPreferenceStorage } from './buildContext';
+import { BuildContexts, buildContextExtension, buildContextVersion, ContextBuildPolicy, ContextOperation, ContextScope, ContextPreferenceStorage } from './buildContext';
 import { BspTestEvent, BspTestOptions } from './bspTestEvents';
 import { testTaskMessage } from './bspTestReports';
 import * as vscode from 'vscode';
@@ -371,13 +371,27 @@ export class BspClient {
     }
 
     runWithoutBuilding(target: BuildTarget): Promise<RunResult> {
-        if (this.contexts.enabled) { return Promise.reject(new Error('This server prepares execution contexts before running. Use Run Target.')); }
+        if (this.contexts.enabled) {
+            return this.executeContext('run', { targets: [target.id] }, undefined, {}, true, [target], 'reuse') as Promise<RunResult>;
+        }
         return this.runTarget(target);
     }
 
-    testWithoutBuilding(target: BuildTarget): Promise<TestResult> {
-        if (this.contexts.enabled) { return Promise.reject(new Error('This server prepares execution contexts before testing. Use Test Target.')); }
-        return this.test(target);
+    async testWithoutBuilding(target: BuildTarget, options: BspTestOptions = {}): Promise<TestResult> {
+        if (!this.supportsTesting || !target.capabilities.canTest) {
+            throw new Error('This target does not support testing');
+        }
+        if (this.contexts.enabled) {
+            return this.executeContext('test', { targets: [target.id] }, options.token, options, true, [target], 'reuse') as Promise<TestResult>;
+        }
+        return this.test(target, options);
+    }
+
+    debugWithoutBuilding(target: BuildTarget): Promise<DebugSessionAddressResult> {
+        if (this.contexts.enabled) {
+            return this.executeContext('debug', { targets: [target.id] }, undefined, {}, true, [target], 'reuse') as Promise<DebugSessionAddressResult>;
+        }
+        return this.debug(target);
     }
 
     private runTarget(target: BuildTarget): Promise<RunResult> {
@@ -512,14 +526,15 @@ export class BspClient {
 
     executeContext(
         operation: ContextOperation, scope: ContextScope = {}, token?: vscode.CancellationToken,
-        options: BspTestOptions = {}, startDebug = true, knownTargets: BuildTarget[] = []
+        options: BspTestOptions = {}, startDebug = true, knownTargets: BuildTarget[] = [], buildPolicy: ContextBuildPolicy = 'build'
     ): Promise<CompileResult | TestResult | RunResult | DebugSessionAddressResult> {
         return this.executeWithProgress(operation, scope.targets?.[0]?.uri ?? 'workspace', async (originId, cancellation) => {
+            this.contexts.requireBuildPolicy(operation, buildPolicy);
             if (this.prepareExecutionContext && !await this.prepareExecutionContext(scope, operation, cancellation)) {
                 this.cancellations.get(originId)?.cancel();
                 throw new Error('Operation cancelled');
             }
-            const resolved = await this.contexts.resolve(scope, operation, cancellation);
+            const resolved = await this.contexts.resolve(scope, operation, cancellation, buildPolicy);
             if (!this.connection) { throw new Error('BSP client not connected'); }
             this.operations.includeTargets(scope.targets?.[0]?.uri ?? 'workspace', resolved.targets.map(target => target.uri));
             const executionContext = { id: resolved.id };
@@ -557,9 +572,9 @@ export class BspClient {
                     if (cancellation.isCancellationRequested) { throw new Error('Debug cancelled'); }
                     if (startDebug) {
                         const configuration = this.configurationForDebugResult(result, resolved.targets[0].uri);
-                        const targets = [...knownTargets, ...this.buildTargets].filter(target =>
-                            resolved.targets.some(id => id.uri === target.id.uri));
-                        if (targets.length && targets.every(target => target.capabilities.canTest && !target.capabilities.canRun)) {
+                        const targets = resolved.targets.map(id =>
+                            [...knownTargets, ...this.buildTargets].find(target => target.id.uri === id.uri));
+                        if (targets.length && targets.every(target => target?.capabilities.canTest && !target.capabilities.canRun)) {
                             configuration.stopOnEntry = false;
                         }
                         await this.startVSCodeDebugSession(configuration);

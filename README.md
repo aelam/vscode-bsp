@@ -132,8 +132,8 @@ for project selection and connection details.
 2. The extension discovers and connects to servers on activation.
    If needed, run **BSP: Connect BSP Servers** from the Command Palette.
 3. Run **BSP: Show Build Targets** to open **BSP Targets** in Explorer.
-   For servers with the configuration extension, use **BSP Contexts** or a target's
-   **Configure Execution Context** menu. Other servers keep their existing selectors.
+   For servers with the configuration extension, use **BSP Contexts**.
+   Other servers keep their existing selectors.
    Use the target's compile, test, run, or debug action, as supported.
    See [Commands](#commands) for the Command Palette entries.
 
@@ -199,7 +199,7 @@ Run `npm run test:protocol` to check progress, cancellation, diagnostics, and ou
 The native VS Code **Testing** panel lists test targets from connected BSP servers.
 Use **Run Tests** to run a target, or run all targets from the panel toolbar.
 The **BSP: Build and Test Target** command also publishes results to this panel.
-Execution settings come from the target's saved context for the test operation,
+Execution settings inherit the workspace Contexts choices and test-operation overrides,
 or from the existing BSP Targets selectors when the server does not use contexts.
 The Stop button cancels the corresponding BSP request.
 
@@ -407,7 +407,9 @@ During `build/initialize`, the client includes this entry in `data.bspExtensions
 ```
 
 The server must acknowledge the same version in `result.data.bspExtensions`, with
-`required: true` and an `operations` array. No acknowledgement means the client
+`required: true` and an `operations` array. The optional `buildPolicies` array
+must contain `"build"` and can include supported alternatives such as `"reuse"`. If absent, only
+`"build"` is supported. No acknowledgement means the client
 uses its existing standard or selector path. Server names do not enable this
 extension.
 
@@ -415,8 +417,10 @@ The client then uses these custom methods:
 
 - `workspace/contextOptions` starts with `scope` and `selection`, without an
   operation. It returns configuration dimensions, selections, and optional available operations.
-- `workspace/resolveContext` adds the chosen `operation`. It returns `id`, `operation`,
-  `targets`, and the effective `selection`.
+- `workspace/resolveContext` adds the chosen `operation` and optional `buildPolicy`.
+  It returns `id`, `operation`, `targets`, the effective `selection`, and `buildPolicy`.
+  The policy defaults to `"build"`. `"reuse"` applies only to Run, Test, and Debug.
+  The server freezes the policy in the resolved context; it is not a selection preference.
 
 The optional scope contains `workspaceUri` and `targets`. Omitted targets allow a
 workspace entry such as a scheme; explicit targets limit the requested operation.
@@ -426,9 +430,11 @@ IDs are opaque strings. A dimension provides `id`, `label`, `kind: "enum"`,
 dimensions remain visible with their reason and cannot be edited. Options provide `id`, `label`, and
 optional descriptions and availability. The UI displays labels, not IDs such as
 `xcode.scheme`. Unsupported required dimension kinds must block execution.
-Dimensions are ordered from earlier choices to dependent choices. Changing one
-clears later explicit choices and refreshes the list. Discovery defaults are
-displayed but are not saved as user preferences.
+Dimensions are ordered from earlier choices to dependent choices. After a change,
+the client validates existing dependent choices in that order. Compatible values
+remain selected; unavailable, disabled, or removed choices are cleared. Selecting
+the same value does not reset later choices. Discovery defaults are displayed
+but are not saved as user preferences.
 
 An option can attach structured destination metadata with
 `dataKind: "execution-destination"` and a `data` object. It contains `kind`,
@@ -459,24 +465,56 @@ change the language server's indexing configuration.
 
 ### Configuration UI
 
-The **BSP Contexts** view shows shared configuration dimensions under each
-connection or target scope. Select a dimension to choose an option. The client uses the order,
+The **BSP Contexts** view shows one workspace scope for each connected BSP server.
+Each scope contains the shared configuration dimensions. Select a dimension to choose an option. The client uses the order,
 labels, and options returned by the server. For Xcode workspace operations, the
 server shows Scheme, Configuration, and Destination from the first query. The
 latter two remain disabled until a Scheme is selected. Selecting an operation
 is not a prerequisite for loading the Scheme list. SwiftPM supplies
 its own dimensions without an Xcode scheme.
 
-Use **Configure Execution Context** on a target to configure that target. Buttons
+Edit configuration in **BSP Contexts**. The target menu keeps its compile, run,
+test, and debug actions without a separate configuration entry. Buttons
 use the server's available operations and the target's standard capabilities.
-Clicking a button supplies the operation for resolution. Workspace and target
-selections are stored separately for each connection. Shared preferences apply
+Clicking a button supplies the operation for resolution. Target operations inherit the workspace choices for dimensions that both scopes
+provide. Workspace-only dimensions do not override the requested target. Invalid
+shared choices are rejected instead of falling back to target defaults. Internal
+target-only choices remain separate for each connection. Shared preferences apply
 to operations unless an operation has an explicit override. Only explicit preferences are saved; resolved context
 IDs remain tied to the current server session.
 
-The legacy **Without Building** commands are hidden on context-enabled
-connections. The server prepares products for the resolved configuration; skipping
-a separate client Compile request does not promise that execution skips builds.
+Option pickers highlight the current choice. Moving the highlight does not save
+a choice; confirm an item to apply it. Optional fields offer **Automatic**, which
+clears that explicit choice while retaining compatible dependent choices. The
+server resolves omitted values when an operation starts. Required fields do not offer Automatic;
+an empty required field shows **Not selected**.
+
+Destination pickers group devices first, simulators next, and generic
+destinations last. Other destination types keep a separate group. Unavailable
+items appear at the end of their group. Platform, version, type, and architecture
+appear beside the name. A server-provided `data.identifier` with `label` and
+`value`, such as `{"label":"UDID","value":"device-uuid"}`, appears in the detail
+line with state and availability information. Opaque option IDs are not treated
+as device identifiers. The configuration list contains fields and reset only; use the scope's
+buttons or the standard commands to execute an operation.
+
+After a choice, the view uses the server's validation response to update that
+scope. Retaining dependent values can require further validation requests in
+dimension order. It does not query every other connection again. Refreshing the view or
+updating targets reloads the options, and execution still validates current
+options before it resolves a context.
+
+**Without Building** actions appear in Target and Contexts scope menus when the
+server advertises `"reuse"` in `buildPolicies`. The client resolves with
+`buildPolicy: "reuse"` and requires the response to explicitly confirm `"reuse"`.
+A missing or different response policy blocks execution, with no fallback build.
+Standard execution requests still carry only `executionContext.id`; the policy
+is not added to them. Normal actions omit the policy and accept older responses
+without it as `"build"`.
+
+Legacy servers keep the existing Without Building commands and standard request
+payloads. These commands skip the client's Compile step; the server controls
+whether its standard execution request performs a build.
 
 See the server's [full contract](https://github.com/aelam/sourcekit-bsp#execution-configuration-extension)
 and the [multi-BSP example](examples/multi-bsp/README.md). The example includes
