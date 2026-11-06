@@ -282,7 +282,7 @@ test('test targets use the debug icon with test arguments and do not stop at ent
         assert.match(icon.group, /inline/);
         assert.match(icon.when, /canDebug/);
         assert.match(icon.when, /busy/);
-        assert.match(icon.when, /canCompile/);
+        assert.doesNotMatch(icon.when, /canCompile/);
         const withoutBuilding = menus.find(m => m.command === 'bsp.debugWithoutBuilding');
         assert.equal(manifest.contributes.commands.find(c => c.command === 'bsp.debugWithoutBuilding').title, 'Debug Without Building');
         assert.match(withoutBuilding.group, /advanced/);

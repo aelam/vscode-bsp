@@ -1,4 +1,5 @@
 import { BspStdio } from './bspStdio';
+import { BuildContexts, buildContextExtension, buildContextVersion, ContextOperation, ContextScope, ContextPreferenceStorage } from './buildContext';
 import { BspTestEvent, BspTestOptions } from './bspTestEvents';
 import { testTaskMessage } from './bspTestReports';
 import * as vscode from 'vscode';
@@ -72,6 +73,11 @@ export class BspClient {
     private testListeners = new Set<(event: BspTestEvent) => void>();
     private testOrigins = new Set<string>();
     private testTasks = new Set<string>();
+    prepareExecutionContext?: (scope: ContextScope, operation: ContextOperation, token: CancellationToken) => Promise<boolean>;
+    readonly contexts = new BuildContexts(<T>(method: string, params: unknown, token: CancellationToken): Promise<T> => {
+        if (!this.connection) { return Promise.reject(new Error('BSP client not connected')); }
+        return this.connection.sendRequest<T>(method, params, token);
+    });
 
     onTestEvent(listener: (event: BspTestEvent) => void): vscode.Disposable {
         this.testListeners.add(listener);
@@ -87,9 +93,20 @@ export class BspClient {
 
     get supportsTesting(): boolean { return this.serverCapabilities.testProvider !== undefined; }
 
+    supportsOperation(operation: ContextOperation, target?: BuildTarget): boolean {
+        const providers = { compile: 'compileProvider', run: 'runProvider', test: 'testProvider', debug: 'debugProvider' } as const;
+        const capabilities = { compile: 'canCompile', run: 'canRun', test: 'canTest', debug: 'canDebug' } as const;
+        const provider = this.serverCapabilities[providers[operation]];
+        return !!provider && (!target || target.capabilities[capabilities[operation]] === true
+            && target.languageIds.some(language => provider.languageIds.includes(language)));
+    }
 
-    constructor(workspaceUri: vscode.Uri, private configPath?: string, onTargetsUpdated?: () => void, private buildSystemManager?: any) {
+
+    constructor(workspaceUri: vscode.Uri, private configPath?: string, onTargetsUpdated?: () => void,
+        private buildSystemManager?: any, preferences?: ContextPreferenceStorage) {
         this.workspaceUri = workspaceUri;
+        const root = workspaceUri.toString();
+        this.contexts.attachPreferences(preferences, JSON.stringify([root, configPath ?? null]), root);
         this.debugSessions = new BspDebugSessions(configPath ?? workspaceUri.fsPath);
         this.diagnosticsCollection = vscode.languages.createDiagnosticCollection('bsp');
         this.onTargetsUpdated = onTargetsUpdated;
@@ -262,6 +279,9 @@ export class BspClient {
     }
 
     compile(target: BuildTarget, token?: vscode.CancellationToken): Promise<CompileResult> {
+        if (this.contexts.enabled) {
+            return this.executeContext('compile', { targets: [target.id] }, token) as Promise<CompileResult>;
+        }
         const targetId = target.id.uri;
         
         return this.executeWithProgress('compile', targetId, async (originId, cancellation) => {
@@ -307,6 +327,9 @@ export class BspClient {
         if (!this.supportsTesting || !target.capabilities.canTest) {
             throw new Error('This target does not support testing');
         }
+        if (this.contexts.enabled) {
+            return this.executeContext('test', { targets: [target.id] }, options.token, options, true, [target]) as Promise<TestResult>;
+        }
         return this.executeWithProgress('test', targetId, async (originId, cancellation) => {
             this.testOrigins.add(originId);
             this.emitTestEvent({
@@ -348,14 +371,19 @@ export class BspClient {
     }
 
     runWithoutBuilding(target: BuildTarget): Promise<RunResult> {
+        if (this.contexts.enabled) { return Promise.reject(new Error('This server prepares execution contexts before running. Use Run Target.')); }
         return this.runTarget(target);
     }
 
     testWithoutBuilding(target: BuildTarget): Promise<TestResult> {
+        if (this.contexts.enabled) { return Promise.reject(new Error('This server prepares execution contexts before testing. Use Test Target.')); }
         return this.test(target);
     }
 
     private runTarget(target: BuildTarget): Promise<RunResult> {
+        if (this.contexts.enabled) {
+            return this.executeContext('run', { targets: [target.id] }) as Promise<RunResult>;
+        }
         const targetId = target.id.uri;
         
         return this.executeWithProgress('run', targetId, async (originId, cancellation) => {
@@ -402,6 +430,9 @@ export class BspClient {
     }
 
     private debugTarget(target: BuildTarget, testing: boolean, token?: vscode.CancellationToken): Promise<DebugSessionAddressResult> {
+        if (this.contexts.enabled) {
+            return this.executeContext('debug', { targets: [target.id] }, token, {}, true, [target]) as Promise<DebugSessionAddressResult>;
+        }
         return this.executeWithProgress('debug', target.id.uri, async (originId, cancellation) => {
             if (testing && (!target.capabilities.canTest || !target.capabilities.canDebug)) {
                 throw new Error('This build target does not support test debugging');
@@ -420,6 +451,13 @@ export class BspClient {
     }
 
     prepareDebugConfiguration(target: BuildTarget, token?: vscode.CancellationToken): Promise<vscode.DebugConfiguration> {
+        if (this.contexts.enabled) {
+            return this.executeContext('debug', { targets: [target.id] }, token, {}, false, [target]).then(result => {
+                const configuration = this.configurationForDebugResult(result as DebugSessionAddressResult, target.id.uri);
+                if (target.capabilities.canTest && !target.capabilities.canRun) { configuration.stopOnEntry = false; }
+                return configuration;
+            });
+        }
         return this.executeWithProgress('debug', target.id.uri, async (originId, cancellation) => {
             const testing = target.capabilities?.canTest === true && !target.capabilities.canRun;
             const result = await this.requestDebugSession(target, originId, cancellation, testing);
@@ -470,6 +508,83 @@ export class BspClient {
             logError('Failed to start debug session', error);
             throw error;
         }
+    }
+
+    executeContext(
+        operation: ContextOperation, scope: ContextScope = {}, token?: vscode.CancellationToken,
+        options: BspTestOptions = {}, startDebug = true, knownTargets: BuildTarget[] = []
+    ): Promise<CompileResult | TestResult | RunResult | DebugSessionAddressResult> {
+        return this.executeWithProgress(operation, scope.targets?.[0]?.uri ?? 'workspace', async (originId, cancellation) => {
+            if (this.prepareExecutionContext && !await this.prepareExecutionContext(scope, operation, cancellation)) {
+                this.cancellations.get(originId)?.cancel();
+                throw new Error('Operation cancelled');
+            }
+            const resolved = await this.contexts.resolve(scope, operation, cancellation);
+            if (!this.connection) { throw new Error('BSP client not connected'); }
+            this.operations.includeTargets(scope.targets?.[0]?.uri ?? 'workspace', resolved.targets.map(target => target.uri));
+            const executionContext = { id: resolved.id };
+            if (operation === 'debug' && resolved.targets.some(id =>
+                ![...knownTargets, ...this.buildTargets].some(target => target.id.uri === id.uri))) {
+                await this.getBuildTargets();
+            }
+            if (operation === 'run' || operation === 'debug') {
+                for (const target of resolved.targets) { await this.stopPreviousDebugSession(target.uri); }
+            }
+            let testStatus = StatusCode.Error;
+            let failure: string | undefined;
+            if (operation === 'test') {
+                let available = [...knownTargets, ...this.buildTargets];
+                if (resolved.targets.some(id => !available.some(target => target.id.uri === id.uri))) {
+                    available = await this.getBuildTargets();
+                }
+                const targets = resolved.targets.map(id => available.find(target => target.id.uri === id.uri));
+                if (targets.some(target => !target)) { throw new Error('A resolved test target is no longer available'); }
+                this.testOrigins.add(originId);
+                for (const target of targets) {
+                    this.emitTestEvent({ kind: 'started', originId, target: target!,
+                        cancel: () => this.cancellations.get(originId)?.cancel() });
+                }
+            }
+            try {
+                if (cancellation.isCancellationRequested) { throw new Error('Operation cancelled'); }
+                showBuildOutput();
+                buildLog(`${operation}: ${resolved.targets.map(target => target.uri).join(', ')}`);
+                const params = operation === 'run'
+                    ? { target: resolved.targets[0], originId, executionContext }
+                    : { targets: resolved.targets, originId, ...(operation === 'test' ? options.selection : {}), executionContext };
+                if (operation === 'debug') {
+                    const result = await this.connection.sendRequest<DebugSessionAddressResult>('debugSession/start', params, cancellation);
+                    if (cancellation.isCancellationRequested) { throw new Error('Debug cancelled'); }
+                    if (startDebug) {
+                        const configuration = this.configurationForDebugResult(result, resolved.targets[0].uri);
+                        const targets = [...knownTargets, ...this.buildTargets].filter(target =>
+                            resolved.targets.some(id => id.uri === target.id.uri));
+                        if (targets.length && targets.every(target => target.capabilities.canTest && !target.capabilities.canRun)) {
+                            configuration.stopOnEntry = false;
+                        }
+                        await this.startVSCodeDebugSession(configuration);
+                    }
+                    return result;
+                }
+                const result = await this.connection.sendRequest<CompileResult | TestResult | RunResult>(
+                    `buildTarget/${operation}`, params, cancellation);
+                testStatus = result.statusCode;
+                if (operation === 'compile') { this.handleCompileResult(result); }
+                else if (operation === 'run') { this.handleRunResult(result); }
+                else if (!options.native) { this.handleTestResult(result); }
+                return result;
+            } catch (error) {
+                failure = error instanceof Error ? error.message : String(error);
+                throw error;
+            } finally {
+                if (operation === 'test') {
+                    this.emitTestEvent({ kind: 'finished', originId,
+                        status: cancellation.isCancellationRequested ? StatusCode.Cancelled : testStatus, error: failure });
+                    this.testOrigins.delete(originId);
+                    if (!this.testOrigins.size) { this.testTasks.clear(); }
+                }
+            }
+        }, { ...options, token });
     }
 
     private async findBspConnectionDetails(): Promise<BspConnectionDetails | undefined> {
@@ -589,12 +704,14 @@ export class BspClient {
             rootUri: this.workspaceUri.toString(),
             capabilities: {
                 languageIds: this.connectionDetails.languages
-            }
+            },
+            data: { bspExtensions: { [buildContextExtension]: { version: buildContextVersion } } }
         };
 
         try {
             const result: InitializeBuildResult = await this.connection.sendRequest('build/initialize', initParams);
             this.serverCapabilities = result.capabilities;
+            this.contexts.negotiate(result.data);
             log(`BSP server initialized: ${JSON.stringify(result)}`);
 
             // Send initialized notification
@@ -849,6 +966,7 @@ export class BspClient {
     }
 
     private clearTaskState(): void {
+        this.contexts.disconnect();
         this.emitTestEvent({ kind: 'disconnected' });
         this.testTasks.clear();
         this.debugSessions.dispose();

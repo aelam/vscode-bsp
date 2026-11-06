@@ -8,6 +8,9 @@ const { CancellationToken } = require('vscode-jsonrpc/node');
 const root = __dirname;
 const failureMarker = path.join(root, 'p2/tests/resources/fail-test.txt');
 const expectFailure = process.argv.includes('--expect-failure');
+const checkXcodeBuild = process.argv.includes('--xcode-build');
+const checkContexts = process.argv.includes('--contexts') || checkXcodeBuild;
+const checkGradle = process.argv.includes('--gradle');
 const notifications = [];
 const records = [];
 const noop = () => {};
@@ -96,7 +99,7 @@ async function main() {
         console.error('BSP smoke test timed out');
         for (const connection of manager.getAllConnections()) { connection.client.serverProcess?.kill(); }
         process.exit(1);
-    }, 180000);
+    }, 360000);
     try {
         const directory = path.join(root, '.bsp-smoke');
         await fs.mkdir(directory, { recursive: true });
@@ -114,6 +117,7 @@ async function main() {
         assert.ok(mill && swift, 'Expected Mill and SourceKit connections');
         assert.equal(mill.config.workspaceUri.toString(), swift.config.workspaceUri.toString());
         const client = mill.client;
+        assert.equal(client.contexts.enabled, false, 'Mill must remain on the standard BSP path');
         const targets = client.targets;
         const swiftTargets = swift.client.targets;
         assert.ok(swiftTargets.some(target => target.displayName === 'Hello'));
@@ -123,6 +127,32 @@ async function main() {
         const kotlinRoot = pathToFileURL(path.join(root, 'p2')).href;
         assert.ok(targets.every(target => target.id.uri === kotlinRoot || target.id.uri.startsWith(kotlinRoot + '/')));
         console.log('Two BSP servers connected to the same root:', root);
+        if (checkContexts) {
+            assert.equal(swift.client.contexts.enabled, true, 'Use the server build with the context extension');
+            const initial = await swift.client.contexts.options({});
+            assert.equal(initial.dimensions[0]?.id, 'xcode.scheme', 'Xcode must offer Scheme first');
+            assert.deepEqual(initial.dimensions.map(dimension => dimension.id),
+                ['xcode.scheme', 'xcode.configuration', 'xcode.destination']);
+            assert.ok(initial.dimensions.slice(1).every(dimension => dimension.enabled === false),
+                'Dependent fields must be visible but disabled before choosing a scheme');
+            const scheme = initial.dimensions[0].options.find(option => option.label === 'Hello' && option.availability !== false);
+            assert.ok(scheme, 'Missing executable Hello scheme');
+            const selected = await swift.client.contexts.options({}, undefined, { 'xcode.scheme': scheme.id });
+            assert.ok(selected.dimensions.some(dimension => dimension.id === 'xcode.configuration'));
+            assert.ok(selected.dimensions.some(dimension => dimension.id === 'xcode.destination'));
+            assert.ok(selected.dimensions.slice(1).every(dimension => dimension.enabled !== false));
+            const destinations = selected.dimensions.find(dimension => dimension.id === 'xcode.destination').options;
+            assert.ok(destinations.some(option => option.dataKind === 'execution-destination'
+                && option.data?.platform?.label && ['simulator', 'generic'].includes(option.data.kind)),
+                'Xcode must supply structured destination metadata');
+            if (checkXcodeBuild) {
+                await swift.client.contexts.setSelection({}, undefined, {
+                    'xcode.scheme': scheme.id, 'xcode.configuration': 'Release'
+                });
+                assert.equal((await swift.client.executeContext('compile')).statusCode, 1);
+                console.log('Xcode Scheme-first discovery and Release context build verified.');
+            }
+        }
         discovery = sourcekitTestDiscovery(swift);
         assert.ok(discovery, 'The SourceKit server must advertise test discovery');
         const swiftTests = await discovery.discover(swiftTargets.filter(target => target.capabilities.canTest), CancellationToken.None);
@@ -159,6 +189,8 @@ async function main() {
         await manager.disconnectFromServer(swift.id);
         assert.ok((await client.getBuildTargets()).some(target => target.displayName === 'app'));
         console.log(`BSP compile/run/test verified: ${target.children.size} test results, expected ${expectFailure ? 'failure' : 'success'}.`);
+        if (checkContexts) { await verifySwiftPM(manager); }
+        if (checkGradle) { await verifyGradle(manager); }
     } finally {
         discovery?.dispose();
         testing?.dispose();
@@ -166,5 +198,78 @@ async function main() {
         for (const connection of manager.getAllConnections()) { connection.client.serverProcess?.kill(); }
         clearTimeout(timeout);
     }
+}
+
+async function connectFolder(manager, folder, name) {
+    const configs = await manager.discoverBspConfigurations(vscode.Uri.file(path.join(root, folder)));
+    const config = configs.find(item => item.name === name);
+    assert.ok(config, `Run setup for ${name} before this check`);
+    const id = await manager.addConnection(config);
+    await manager.connectToServer(id);
+    const connection = manager.getAllConnections().find(item => item.id === id);
+    assert.ok(connection.connected, connection.error);
+    await connection.client.getBuildTargets();
+    return connection;
+}
+
+async function verifySwiftPM(manager) {
+    const connection = await connectFolder(manager, 'p3', 'sourcekit-swiftpm');
+    const client = connection.client;
+    assert.equal(client.contexts.enabled, true);
+    const executable = client.targets.find(target => target.capabilities.canRun);
+    const tests = client.targets.find(target => target.capabilities.canTest);
+    assert.ok(executable && tests, 'Missing SwiftPM executable or test target');
+    const scope = { targets: [executable.id] };
+    const options = await client.contexts.options(scope, 'run');
+    assert.ok(!options.dimensions.some(dimension => dimension.id.includes('scheme')));
+    const host = options.dimensions.find(dimension => dimension.id === 'swiftpm.destination')?.options[0];
+    assert.equal(host?.dataKind, 'execution-destination');
+    assert.equal(host?.data.kind, 'host');
+    assert.ok(host?.data.platform?.label && host.data.architecture);
+    const configuration = options.dimensions.find(dimension => dimension.id === 'swiftpm.configuration');
+    assert.ok(configuration);
+    const messages = [];
+    client.connection.onNotification('build/logMessage', event => messages.push(event.message));
+    for (const label of ['Release', 'Debug']) {
+        const option = configuration.options.find(item => item.label.toLowerCase() === label.toLowerCase());
+        assert.ok(option, `Missing ${label} configuration`);
+        await client.contexts.setSelection(scope, 'run', { [configuration.id]: option.id });
+        messages.length = 0;
+        assert.equal((await client.run(executable)).statusCode, 1);
+        assert.match(messages.join('\n'), new RegExp(`\\[${label.toLowerCase()}\\]`), 'Run must use the selected configuration');
+    }
+    assert.deepEqual(client.contexts.getSelection({}, 'run'), {}, 'Target preferences must not change workspace preferences');
+    await assert.rejects(client.connection.sendRequest('buildTarget/compile', { targets: [executable.id] }),
+        error => error.code === -32602, 'Negotiated connections must reject missing contexts');
+    const resolved = await client.contexts.resolve(scope, 'run');
+    messages.length = 0;
+    assert.equal((await client.connection.sendRequest('buildTarget/run', {
+        target: executable.id, executionContext: { id: resolved.id }, arguments: ['--configuration']
+    })).statusCode, 1);
+    assert.match(messages.join('\n'), /Hello, --configuration! \[debug\]/,
+        'Application arguments must not be interpreted as build configuration flags');
+    await assert.rejects(client.connection.sendRequest('buildTarget/compile', {
+        targets: [executable.id], executionContext: { id: resolved.id }
+    }), error => error.code === -32602, 'Contexts must not cross operation boundaries');
+    assert.equal((await client.test(tests)).statusCode, 1);
+    assert.ok(client.targets.every(target => target.id.uri.includes('/p3')));
+    console.log('SwiftPM context configuration, scope isolation, strict execution, and tests verified.');
+}
+
+async function verifyGradle(manager) {
+    const connection = await connectFolder(manager, 'p4', 'gradle-bsp');
+    const client = connection.client;
+    assert.equal(client.contexts.enabled, false, 'Gradle must remain on the standard BSP path');
+    const app = client.targets.find(target => target.displayName === "project ':app'" && target.capabilities.canRun);
+    const tests = client.targets.find(target => target.capabilities.canTest && target.tags?.includes('test'))
+        ?? client.targets.find(target => target.capabilities.canTest);
+    assert.ok(app && tests, 'Missing Gradle application or test target');
+    assert.equal((await client.compile(app)).statusCode, 1);
+    assert.equal((await client.run(app)).statusCode, 1);
+    assert.equal((await client.test(tests)).statusCode, 1);
+    const mill = manager.getAllConnections().find(item => item.config.name === 'mill-bsp');
+    await manager.disconnectFromServer(connection.id);
+    assert.ok((await mill.client.getBuildTargets()).length, 'Disconnecting Gradle must not disconnect Mill');
+    console.log('Gradle BSP discovery, compile, run, test, and connection isolation verified.');
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });

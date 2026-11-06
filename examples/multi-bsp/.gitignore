@@ -12,4 +12,9 @@ xcuserdata/
 *.profraw
 p2/tests/resources/fail-test.txt
 .dist/
+.build/
+.swiftpm/
+.gradle/
+.tools/
+p4/gradle/
 .DS_Store

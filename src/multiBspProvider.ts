@@ -289,8 +289,18 @@ export class MultiBspProvider implements vscode.TreeDataProvider<BspTreeItem> {
         if (element.type === 'buildTarget' && !/loading|disconnected/.test(element.contextValue ?? '')) {
             const favorite = /favorite/.test(element.contextValue ?? '') ? ' favorite' : '';
             element.contextValue = this.getBuildTargetContextValue(target) + favorite;
+            if (connection.client.contexts?.enabled) {
+                const capabilities = {
+                    canCompile: connection.client.supportsOperation('compile', target),
+                    canRun: connection.client.supportsOperation('run', target),
+                    canTest: connection.client.supportsOperation('test', target),
+                    canDebug: connection.client.supportsOperation('debug', target)
+                };
+                element.contextValue = this.getBuildTargetContextValue({ ...target, capabilities }) + favorite + ' supportsBuildContext';
+            }
             if (!connection.client.cleanCacheBlockedReason) { element.contextValue += ' canCleanCache'; }
             element.description = this.getBuildTargetDescription(target);
+            if (connection.client.contexts?.enabled) { element.description = [...target.tags, ...target.languageIds].join(' · '); }
             element.iconPath = this.getBuildTargetIcon(target);
             element.tooltip = this.getBuildTargetTooltip(target, connection.config.displayName);
             if (operation) {
@@ -434,7 +444,13 @@ export class MultiBspProvider implements vscode.TreeDataProvider<BspTreeItem> {
         // Capabilities are now shown via enabled/disabled buttons, no need to show as children
 
         // Add build system configuration if supported
-        if (this.buildSystemManager.canHandle(target)) {
+        if (element.connectionId && this.connectionManager.getConnection(element.connectionId)?.client.contexts?.enabled) {
+            const contextItem = new BspTreeItem('Execution Configuration', vscode.TreeItemCollapsibleState.None, 'buildConfig');
+            contextItem.connectionId = element.connectionId;
+            contextItem.buildTarget = target;
+            contextItem.command = { command: 'bsp.configureContext', title: 'Configure Execution Context', arguments: [contextItem] };
+            children.push(contextItem);
+        } else if (this.buildSystemManager.canHandle(target)) {
             const buildSettingsDesc = this.buildSystemManager.getBuildSettingsDescription(target);
             if (buildSettingsDesc) {
                 children.push(new BspTreeItem(
