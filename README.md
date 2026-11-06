@@ -243,6 +243,12 @@ app-hosted unit test targets on an iOS simulator. Set breakpoints on executable
 lines in the test source before starting. SwiftPM uses the active Xcode toolchain
 and runs the selected target's XCTest and Swift Testing tests.
 
+For test targets that cannot run as executables, F5 and the target's Debug action
+continue to a breakpoint instead of stopping at process entry. If the adapter's
+first thread list omits the stopped thread, the client requests the list once
+more before the editor selects a stack. This avoids showing an unrelated
+thread's system frames when the adapter returns a stale list.
+
 Test targets use the double-check **Build and Test** icon to run tests. Targets
 that support testing but cannot run as an executable do not show a disabled Run
 icon. Debug remains a separate action when the server advertises `canDebug`.

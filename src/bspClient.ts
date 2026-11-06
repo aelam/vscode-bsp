@@ -424,7 +424,9 @@ export class BspClient {
             const testing = target.capabilities?.canTest === true && !target.capabilities.canRun;
             const result = await this.requestDebugSession(target, originId, cancellation, testing);
             if (cancellation.isCancellationRequested) { throw new Error('Debug cancelled'); }
-            return this.configurationForDebugResult(result, target.id.uri);
+            const configuration = this.configurationForDebugResult(result, target.id.uri);
+            if (testing) { configuration.stopOnEntry = false; }
+            return configuration;
         }, { token });
     }
 

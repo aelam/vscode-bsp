@@ -10,6 +10,13 @@ const folder = { uri: { fsPath: '/hello' } };
 let startResult = true;
 let lldbInitCommands = [];
 const vscode = {
+    EventEmitter: class {
+        listeners = new Set();
+        event = listener => { this.listeners.add(listener); return { dispose: () => this.listeners.delete(listener) }; };
+        fire(value) { for (const listener of this.listeners) { listener(value); } }
+        dispose() { this.listeners.clear(); }
+    },
+    DebugAdapterInlineImplementation: class { constructor(implementation) { this.implementation = implementation; } },
     DebugAdapterServer: class { constructor(port, host) { Object.assign(this, { port, host }); } },
     DebugAdapterNamedPipeServer: class { constructor(path) { this.path = path; } },
     languages: { createDiagnosticCollection: () => ({}) },
@@ -144,7 +151,8 @@ test('F5 prepares one BSP request and does not start a nested VS Code session', 
         assert.equal(config.bspTarget, target.id.uri);
         assert.equal(config.bspOwner, '/hello/.bsp/config.json');
         const descriptor = new BspDebugAdapterDescriptorFactory().createDebugAdapterDescriptor({ configuration: config });
-        assert.equal(descriptor.port, port);
+        assert.equal(descriptor.implementation.endpoint.port, port);
+        descriptor.implementation.dispose();
     }
     assert.equal(requests, 2);
     assert.equal(starts.length, 0);
@@ -262,6 +270,10 @@ test('test targets use the debug icon with test arguments and do not stop at ent
             assert.equal(starts.at(-1)[1].pid, 1234);
             assert.match(starts.at(-1)[1].name, /Debug Tests/);
         }
+        const provider = new BspDebugConfigurationProvider(() => client.prepareDebugConfiguration(target));
+        const f5 = await provider.resolveDebugConfiguration(folder,
+            { type: 'bsp-debug', request: 'launch', name: 'Tests', stopOnEntry: true });
+        assert.equal(f5.stopOnEntry, false);
         await assert.rejects(client.debugTests({ ...target, capabilities: { canTest: true, canDebug: false } }), /does not support/);
         const manifest = require('../package.json');
         const menus = manifest.contributes.menus['view/item/context'];
