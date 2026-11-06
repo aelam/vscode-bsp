@@ -89,16 +89,19 @@ class SourceKitTestDiscovery implements TestDiscovery {
             }
         }
         // Document requests include unsaved edits and do not require a completed index build.
-        const discovered = new Map<string, DiscoveredTest[]>();
+        const discovered = new Map<string, unknown[]>();
         for (const uri of files) {
             const result = await this.request<unknown>('textDocument/tests', { textDocument: { uri } }, token);
             if (!Array.isArray(result)) { throw new Error('SourceKit-LSP returned an invalid test list'); }
-            discovered.set(uri, result.map(convert).filter((test): test is DiscoveredTest => !!test));
+            discovered.set(uri, result);
         }
         return new Map(targets.map(target => {
             const owned = sources.find(item => item.target.uri === target.id.uri)?.sources ?? [];
+            const moduleName = object(object(target.data)?.testDiscovery)?.moduleName;
             const tests = [...discovered].filter(([uri]) => owned.some(source => source.uri === uri))
-                .flatMap(([, tests]) => tests);
+                .flatMap(([, tests]) => tests)
+                .map(test => convert(test, typeof moduleName === 'string' ? moduleName : undefined))
+                .filter((test): test is DiscoveredTest => !!test);
             return [target.id.uri, tests];
         }));
     }
@@ -115,9 +118,13 @@ class SourceKitTestDiscovery implements TestDiscovery {
         if (typeof toolchain !== 'string') { throw new Error('The server did not provide a Swift toolchain for test discovery'); }
         const root = this.connection.config.workspaceUri.fsPath;
         await validateSourcekitBspConfig(root, this.connection.config.configPath);
-        const executable = path.join(fileURLToPath(toolchain), 'usr/bin/sourcekit-lsp');
-        const developer = path.resolve(fileURLToPath(toolchain), '../..');
-        const child = spawn(executable, [], { cwd: root, env: { ...process.env, DEVELOPER_DIR: developer } });
+        const toolchainRoot = fileURLToPath(toolchain);
+        const executable = path.join(toolchainRoot, 'usr/bin/sourcekit-lsp');
+        const environment = { ...process.env };
+        if (process.platform === 'darwin' && path.basename(path.dirname(toolchainRoot)) === 'Toolchains') {
+            environment.DEVELOPER_DIR = path.resolve(toolchainRoot, '../..');
+        }
+        const child = spawn(executable, [], { cwd: root, env: environment });
         this.child = child;
         const rpc = createMessageConnection(new StreamMessageReader(child.stdout), new StreamMessageWriter(child.stdin));
         this.rpc = rpc;
@@ -185,16 +192,19 @@ class SourceKitTestDiscovery implements TestDiscovery {
     }
 }
 
-export function convert(value: unknown): DiscoveredTest | undefined {
+export function convert(value: unknown, moduleName?: string): DiscoveredTest | undefined {
     const test = object(value);
     const location = testLocation(test?.location);
     if (typeof test?.id !== 'string' || typeof test.label !== 'string' || !location || !Array.isArray(test.children)) {
         return undefined;
     }
-    // SourceKit-LSP prefixes IDs with the Swift module; xcresult IDs are scoped to the target.
-    const dot = test.id.indexOf('.');
-    const id = dot >= 0 ? test.id.slice(dot + 1) : test.id;
-    const children = test.children.map(convert).filter((child): child is DiscoveredTest => !!child);
+    // Syntactic discovery can return IDs without a module prefix, including names with dots.
+    // Keep the legacy Xcode conversion when the server does not provide a module name.
+    const prefix = moduleName === undefined ? test.id.indexOf('.') + 1
+        : test.id.startsWith(moduleName + '.') ? moduleName.length + 1 : 0;
+    const id = test.id.slice(prefix);
+    const children = test.children.map(child => convert(child, moduleName))
+        .filter((child): child is DiscoveredTest => !!child);
     const supported = test.style === 'XCTest' || test.style === 'swift-testing';
     return { id, label: test.label, uri: location.uri, range: location.range, disabled: test.disabled === true,
         children, selector: supported && !children.length && id.endsWith(')') ? { id, style: test.style } : undefined };

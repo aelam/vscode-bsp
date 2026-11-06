@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { TargetBusyError } from './bspTargetOperations';
+import { BspDebugAdapter } from './bspDebugAdapter';
 
 type PrepareDebug = (
     folder: vscode.WorkspaceFolder | undefined,
@@ -46,11 +47,11 @@ export class BspDebugAdapterDescriptorFactory implements vscode.DebugAdapterDesc
     createDebugAdapterDescriptor(session: vscode.DebugSession): vscode.DebugAdapterDescriptor {
         const connect = session.configuration.connect;
         if (typeof connect?.socket === 'string' && connect.socket) {
-            return new vscode.DebugAdapterNamedPipeServer(connect.socket);
+            return new vscode.DebugAdapterInlineImplementation(new BspDebugAdapter({ socket: connect.socket }));
         }
         if (typeof connect?.host === 'string' && connect.host
             && Number.isInteger(connect.port) && connect.port > 0 && connect.port <= 65535) {
-            return new vscode.DebugAdapterServer(connect.port, connect.host);
+            return new vscode.DebugAdapterInlineImplementation(new BspDebugAdapter({ host: connect.host, port: connect.port }));
         }
         throw new Error('No valid BSP debug address. Start BSP Debug to request a new debug session.');
     }

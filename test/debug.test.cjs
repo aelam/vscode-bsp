@@ -10,6 +10,13 @@ const folder = { uri: { fsPath: '/hello' } };
 let startResult = true;
 let lldbInitCommands = [];
 const vscode = {
+    EventEmitter: class {
+        listeners = new Set();
+        event = listener => { this.listeners.add(listener); return { dispose: () => this.listeners.delete(listener) }; };
+        fire(value) { for (const listener of this.listeners) { listener(value); } }
+        dispose() { this.listeners.clear(); }
+    },
+    DebugAdapterInlineImplementation: class { constructor(implementation) { this.implementation = implementation; } },
     DebugAdapterServer: class { constructor(port, host) { Object.assign(this, { port, host }); } },
     DebugAdapterNamedPipeServer: class { constructor(path) { this.path = path; } },
     languages: { createDiagnosticCollection: () => ({}) },
@@ -50,10 +57,19 @@ test('uses each server-assigned address and preserves attach and launch paramete
         assert.equal(config.request, 'attach');
         assert.equal(config.pid, 42);
     }
-    const unix = debugConfiguration({ uri: 'unix:///tmp/bsp%20debug.sock', data: { request: 'launch', program: '/tmp/Hello' } }, 'Hello');
+    const launch = { request: 'launch', program: '/tmp/Hello', args: ['--filter', 'Tests', '/tmp/中文 tests'],
+        env: { TEST_FILTER: 'Tests', EMPTY: '' }, cwd: '/tmp/中文 tests' };
+    const unix = debugConfiguration({ uri: 'unix:///tmp/bsp%20debug.sock', data: launch }, 'Hello');
     assert.deepEqual(unix.connect, { socket: '/tmp/bsp debug.sock' });
     assert.equal(unix.request, 'launch');
     assert.equal(unix.program, '/tmp/Hello');
+    assert.deepEqual(unix.args, launch.args);
+    assert.deepEqual(unix.env, launch.env);
+    assert.equal(unix.cwd, launch.cwd);
+    unix.args.push('client-only');
+    unix.env.EMPTY = 'client-only';
+    assert.equal(launch.args.length, 3);
+    assert.equal(launch.env.EMPTY, '');
     assert.deepEqual(debugConfiguration({ uri: 'tcp://[::1]:23456' }, 'Hello').connect, { host: '::1', port: 23456 });
 });
 
@@ -135,7 +151,8 @@ test('F5 prepares one BSP request and does not start a nested VS Code session', 
         assert.equal(config.bspTarget, target.id.uri);
         assert.equal(config.bspOwner, '/hello/.bsp/config.json');
         const descriptor = new BspDebugAdapterDescriptorFactory().createDebugAdapterDescriptor({ configuration: config });
-        assert.equal(descriptor.port, port);
+        assert.equal(descriptor.implementation.endpoint.port, port);
+        descriptor.implementation.dispose();
     }
     assert.equal(requests, 2);
     assert.equal(starts.length, 0);
@@ -253,6 +270,10 @@ test('test targets use the debug icon with test arguments and do not stop at ent
             assert.equal(starts.at(-1)[1].pid, 1234);
             assert.match(starts.at(-1)[1].name, /Debug Tests/);
         }
+        const provider = new BspDebugConfigurationProvider(() => client.prepareDebugConfiguration(target));
+        const f5 = await provider.resolveDebugConfiguration(folder,
+            { type: 'bsp-debug', request: 'launch', name: 'Tests', stopOnEntry: true });
+        assert.equal(f5.stopOnEntry, false);
         await assert.rejects(client.debugTests({ ...target, capabilities: { canTest: true, canDebug: false } }), /does not support/);
         const manifest = require('../package.json');
         const menus = manifest.contributes.menus['view/item/context'];
