@@ -238,8 +238,15 @@ The target action builds first. The context menu also includes
 directly. BSP treats that request as a debug launch without an implicit compile
 step.
 
-With sourcekit-bsp, this runs the whole app-hosted unit test target on an iOS
-simulator. Set breakpoints on executable lines in the test source before starting.
+With sourcekit-bsp, test debugging supports SwiftPM test targets on macOS and
+app-hosted unit test targets on an iOS simulator. Set breakpoints on executable
+lines in the test source before starting. SwiftPM uses the active Xcode toolchain
+and runs the selected target's XCTest and Swift Testing tests.
+
+Test targets use the double-check **Build and Test** icon to run tests. Targets
+that support testing but cannot run as an executable do not show a disabled Run
+icon. Debug remains a separate action when the server advertises `canDebug`.
+
 UI tests, physical-device test debugging, and individual test selection are not
 supported yet. This entry is in BSP Targets; the Testing panel's Run Tests
 profile keeps its existing behavior and result reports.

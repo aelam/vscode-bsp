@@ -50,10 +50,19 @@ test('uses each server-assigned address and preserves attach and launch paramete
         assert.equal(config.request, 'attach');
         assert.equal(config.pid, 42);
     }
-    const unix = debugConfiguration({ uri: 'unix:///tmp/bsp%20debug.sock', data: { request: 'launch', program: '/tmp/Hello' } }, 'Hello');
+    const launch = { request: 'launch', program: '/tmp/Hello', args: ['--filter', 'Tests', '/tmp/中文 tests'],
+        env: { TEST_FILTER: 'Tests', EMPTY: '' }, cwd: '/tmp/中文 tests' };
+    const unix = debugConfiguration({ uri: 'unix:///tmp/bsp%20debug.sock', data: launch }, 'Hello');
     assert.deepEqual(unix.connect, { socket: '/tmp/bsp debug.sock' });
     assert.equal(unix.request, 'launch');
     assert.equal(unix.program, '/tmp/Hello');
+    assert.deepEqual(unix.args, launch.args);
+    assert.deepEqual(unix.env, launch.env);
+    assert.equal(unix.cwd, launch.cwd);
+    unix.args.push('client-only');
+    unix.env.EMPTY = 'client-only';
+    assert.equal(launch.args.length, 3);
+    assert.equal(launch.env.EMPTY, '');
     assert.deepEqual(debugConfiguration({ uri: 'tcp://[::1]:23456' }, 'Hello').connect, { host: '::1', port: 23456 });
 });
 

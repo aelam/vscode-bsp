@@ -481,7 +481,7 @@
         },
         {
           "command": "bsp.runDisabled",
-          "when": "view == bspTargets && viewItem =~ /^buildTarget/ && !(viewItem =~ /canRun/) && !(viewItem =~ /busy/)",
+          "when": "view == bspTargets && viewItem =~ /^buildTarget/ && !(viewItem =~ /canRun|canTest/) && !(viewItem =~ /busy/)",
           "group": "inline@3"
         },
         {

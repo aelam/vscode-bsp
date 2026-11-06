@@ -110,6 +110,9 @@ export interface DebugSessionData {
     program?: string;
     pid?: number;
     bundleId?: string;
+    args?: string[];
+    env?: Record<string, string>;
+    cwd?: string;
 }
 
 export interface DebugSessionAddressResult {
