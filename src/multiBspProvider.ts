@@ -88,7 +88,7 @@ export class MultiBspProvider implements vscode.TreeDataProvider<BspTreeItem> {
                     item.buildTarget = target;
                     item.description = this.getBuildTargetDescription(target);
                     item.tooltip = this.getBuildTargetTooltip(target, connection.config.displayName);
-                    item.contextValue = this.getBuildTargetContextValue(target) + ' favorite';
+                    item.contextValue = this.getBuildTargetContextValue(target, connection) + ' favorite';
                     item.iconPath = this.getBuildTargetIcon(target);
                     
                     favoriteItems.push(item);
@@ -282,13 +282,17 @@ export class MultiBspProvider implements vscode.TreeDataProvider<BspTreeItem> {
     }
 
     getTreeItem(element: BspTreeItem): vscode.TreeItem {
+        if (element.type === 'buildTarget') {
+            element.contextValue = element.contextValue?.split(' ')
+                .filter(value => value !== 'canRevealBuildOutput').join(' ');
+        }
         const target = element.buildTarget;
         const connection = element.connectionId ? this.connectionManager.getConnection(element.connectionId) : undefined;
         if (!target || !connection?.connected) { return element; }
         const operation = connection.client.operations.get(target.id.uri);
         if (element.type === 'buildTarget' && !/loading|disconnected/.test(element.contextValue ?? '')) {
             const favorite = /favorite/.test(element.contextValue ?? '') ? ' favorite' : '';
-            element.contextValue = this.getBuildTargetContextValue(target) + favorite;
+            element.contextValue = this.getBuildTargetContextValue(target, connection) + favorite;
             if (!connection.client.cleanCacheBlockedReason) { element.contextValue += ' canCleanCache'; }
             element.description = this.getBuildTargetDescription(target);
             element.iconPath = this.getBuildTargetIcon(target);
@@ -408,7 +412,7 @@ export class MultiBspProvider implements vscode.TreeDataProvider<BspTreeItem> {
                 item.buildTarget = target;
                 item.description = this.getBuildTargetDescription(target);
                 item.tooltip = this.getBuildTargetTooltip(target, connection.config.displayName);
-                item.contextValue = this.getBuildTargetContextValue(target);
+                item.contextValue = this.getBuildTargetContextValue(target, connection);
                 item.iconPath = this.getBuildTargetIcon(target);
                 
                 return item;
@@ -666,8 +670,11 @@ export class MultiBspProvider implements vscode.TreeDataProvider<BspTreeItem> {
         return lines.join('\n');
     }
 
-    private getBuildTargetContextValue(target: BuildTarget): string {
+    private getBuildTargetContextValue(target: BuildTarget, connection: BspConnection): string {
         const contextValues = ['buildTarget'];
+        if (connection.connected && connection.client.connected && connection.client.supportsOutputPaths) {
+            contextValues.push('canRevealBuildOutput');
+        }
         
         // Debug logging
         console.log(`🔍 Target capabilities for ${target.displayName || target.id.uri}:`, {

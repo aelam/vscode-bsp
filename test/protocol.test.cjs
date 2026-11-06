@@ -128,10 +128,13 @@ test('client connects task notifications to the request window and sends cancell
     assert.equal(client.getActiveRequests().size, 0);
     assert.equal(errors.length, 0);
     const target = { id: { uri: 'target://app' } };
+    assert.equal(client.supportsOutputPaths, false);
     await assert.rejects(client.getOutputPaths(target), /does not provide/);
     client.serverCapabilities = { outputPathsProvider: true };
     const path = { uri: 'file:///build/Products', kind: 2 };
+    let outputRequests = 0;
     client.connection.sendRequest = async (method, params) => {
+        outputRequests++;
         assert.equal(method, 'buildTarget/outputPaths');
         assert.deepEqual(params, { targets: [target.id] });
         return { items: [
@@ -140,6 +143,17 @@ test('client connects task notifications to the request window and sends cancell
         ] };
     };
     assert.deepEqual(await client.getOutputPaths(target), [path]);
+    for (const advertised of [false, undefined, true]) {
+        client.serverCapabilities = advertised === undefined ? {} : { outputPathsProvider: advertised };
+        assert.equal(client.supportsOutputPaths, advertised === true);
+        if (advertised === true) {
+            assert.deepEqual(await client.getOutputPaths(target), [path]);
+        } else {
+            await assert.rejects(client.getOutputPaths(target), /does not provide build output paths/);
+            assert.equal(outputRequests, 1);
+        }
+    }
+    assert.equal(outputRequests, 2);
 
     handlers.get('build/taskStart')({ taskId: { id: 'tests' }, message: 'Run tests' });
     handlers.get('build/taskStart')({ taskId: { id: 'case', parents: ['tests'] }, dataKind: 'test-start', data: { displayName: 'example()' } });
