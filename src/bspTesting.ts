@@ -19,6 +19,9 @@ interface Session {
 export class BspTesting implements vscode.Disposable {
     readonly controller = vscode.tests.createTestController('bsp-tests', 'BSP Tests');
     private tag = new vscode.TestTag('bsp-test-target');
+    private debugTag = new vscode.TestTag('bsp-debug-test-target');
+    private debugProfile?: vscode.TestRunProfile;
+    private debugStarts = new Map<string, CancellationTokenSource>();
     private targets = new Map<string, Target>();
     private listeners = new Map<string, vscode.Disposable>();
     private subscriptions: vscode.Disposable[] = [];
@@ -33,7 +36,7 @@ export class BspTesting implements vscode.Disposable {
 
     constructor(private manager: BspConnectionManager, legacy?: BspClient, factories: TestDiscoveryFactory[] = []) {
         this.discovery = new BspTestDiscovery(this.controller, this.tag, factories,
-            id => this.activeTargets.has(id) || this.pending.has(id));
+            id => this.activeTargets.has(id) || this.pending.has(id) || this.debugStarts.has(id));
         if (legacy) {
             this.legacy = {
                 id: 'legacy', client: legacy, connected: false,
@@ -86,7 +89,7 @@ export class BspTesting implements vscode.Disposable {
                     ?? this.controller.createTestItem(id, target.displayName ?? target.id.uri);
                 item.label = target.displayName ?? target.id.uri;
                 if (!this.discovery.catalog(item)) { item.description = 'Run this target to load test results'; }
-                item.tags = [this.tag];
+                item.tags = target.capabilities.canDebug ? [this.tag, this.debugTag] : [this.tag];
                 this.targets.set(id, { item, connectionId: connection.id, client: connection.client, target });
                 keep.add(id);
                 items.push(item);
@@ -95,7 +98,86 @@ export class BspTesting implements vscode.Disposable {
             this.controller.items.add(group);
         }
         for (const id of this.targets.keys()) { if (!keep.has(id)) { this.targets.delete(id); } }
+        this.syncDebugProfile();
         this.discovery.sync(connections, [...this.targets.values()]);
+    }
+
+    private syncDebugProfile(): void {
+        for (const [id, cancellation] of this.debugStarts) {
+            if (!this.targets.get(id)?.target.capabilities.canDebug) { cancellation.cancel(); }
+        }
+        const supported = [...this.targets.values()].some(entry => entry.target.capabilities.canDebug);
+        if (supported && !this.debugProfile) {
+            this.debugProfile = this.controller.createRunProfile('Debug Test Target', vscode.TestRunProfileKind.Debug,
+                (request, token) => this.debug(request, token), true, this.debugTag);
+        } else if (!supported && this.debugProfile) {
+            this.debugProfile.dispose();
+            this.debugProfile = undefined;
+        }
+    }
+
+    private async debug(request: vscode.TestRunRequest, token: vscode.CancellationToken): Promise<void> {
+        if (this.disposed || token.isCancellationRequested) { return; }
+        let cancellation: CancellationTokenSource | undefined;
+        let subscription: vscode.Disposable | undefined;
+        let entry: Target | undefined;
+        try {
+            const selected = new Map<string, Target>();
+            const excludes = request.exclude ?? [];
+            const visit = (item: vscode.TestItem) => {
+                if (excludes.some(exclude => contains(exclude, item))) { return; }
+                const target = this.targets.get(item.id);
+                if (target) {
+                    if (!target.target.capabilities.canDebug) { return; }
+                    if (excludes.some(exclude => contains(item, exclude))) {
+                        throw new Error('Debug runs the entire test target. Individual test exclusions are not supported.');
+                    }
+                    selected.set(item.id, target);
+                    return;
+                }
+                if (this.discovery.model(item) || (item.parent && this.targets.has(item.parent.id))) {
+                    throw new Error('Select a whole test target. Individual test debugging is not supported.');
+                }
+                for (const [, child] of item.children) { visit(child); }
+            };
+            for (const item of request.include ?? [...this.controller.items].map(([, item]) => item)) { visit(item); }
+            if (selected.size !== 1) { throw new Error('Select one test target that supports debugging.'); }
+            entry = [...selected.values()][0];
+            if (this.activeTargets.has(entry.item.id) || this.pending.has(entry.item.id) || this.debugStarts.has(entry.item.id)) {
+                throw new Error('Tests for this target are already running');
+            }
+            cancellation = new CancellationTokenSource();
+            this.debugStarts.set(entry.item.id, cancellation);
+            const source = cancellation;
+            subscription = token.onCancellationRequested(() => source.cancel());
+            if (token.isCancellationRequested) { source.cancel(); }
+            for (const document of vscode.workspace?.textDocuments ?? []) {
+                if (source.token.isCancellationRequested) { return; }
+                if (document.isDirty && !await document.save()) { throw new Error('Save test files before debugging tests'); }
+            }
+            if (source.token.isCancellationRequested) { return; }
+            if (entry.target.capabilities.canCompile) {
+                const result = await entry.client.compile(entry.target, source.token);
+                if (source.token.isCancellationRequested || result.statusCode === StatusCode.Cancelled) { return; }
+                if (result.statusCode !== StatusCode.Ok) { throw new Error('Build failed. The test debugger was not started.'); }
+            }
+            if (source.token.isCancellationRequested || this.disposed) { return; }
+            const current = this.targets.get(entry.item.id);
+            if (!entry.client.connected || current?.client !== entry.client || !current.target.capabilities.canDebug) {
+                throw new Error('This test target is no longer available for debugging.');
+            }
+            await entry.client.debugTests(current.target, source.token);
+        } catch (error) {
+            if (!this.disposed && !token.isCancellationRequested && !cancellation?.token.isCancellationRequested) {
+                void vscode.window.showErrorMessage(`Cannot debug tests: ${String(error)}`);
+            }
+        } finally {
+            subscription?.dispose();
+            if (entry && cancellation && this.debugStarts.get(entry.item.id) === cancellation) {
+                this.debugStarts.delete(entry.item.id);
+            }
+            cancellation?.dispose();
+        }
     }
 
     private async loadTargets(client: BspClient): Promise<void> {
@@ -166,7 +248,7 @@ export class BspTesting implements vscode.Disposable {
                 if (cancellation.token.isCancellationRequested) {
                     run.skipped(entry.item); items?.forEach(item => run.skipped(item)); continue;
                 }
-                if (this.activeTargets.has(entry.item.id) || this.pending.has(entry.item.id)) {
+                if (this.activeTargets.has(entry.item.id) || this.pending.has(entry.item.id) || this.debugStarts.has(entry.item.id)) {
                     run.errored(entry.item, new vscode.TestMessage('Tests for this target are already running'));
                     continue;
                 }
@@ -268,12 +350,16 @@ export class BspTesting implements vscode.Disposable {
     }
 
     private disconnected(connectionId: string): void {
+        for (const [id, cancellation] of this.debugStarts) {
+            if (this.targets.get(id)?.connectionId === connectionId) { cancellation.cancel(); }
+        }
         this.discovery.remove(connectionId);
         for (const [key, session] of this.sessions) {
             if (session.connectionId === connectionId) { this.finish(key, StatusCode.Error, 'BSP server disconnected'); }
         }
         this.controller.items.delete(connectionId);
         for (const [id, target] of this.targets) { if (target.connectionId === connectionId) { this.targets.delete(id); } }
+        this.syncDebugProfile();
     }
 
     dispose(): void {
@@ -281,6 +367,9 @@ export class BspTesting implements vscode.Disposable {
         for (const session of this.sessions.values()) { session.cancel(); }
         for (const key of [...this.sessions.keys()]) { this.finish(key, StatusCode.Cancelled); }
         this.disposed = true;
+        for (const cancellation of this.debugStarts.values()) { cancellation.cancel(); }
+        this.debugProfile?.dispose();
+        this.debugProfile = undefined;
         this.discovery.dispose();
         this.subscriptions.forEach(s => s.dispose());
         this.listeners.forEach(s => s.dispose());

@@ -201,6 +201,16 @@ The **BSP: Build and Test Target** command also publishes results to this panel.
 Configuration and destination selections come from the BSP Targets view.
 The Stop button cancels the corresponding BSP request.
 
+Targets that advertise both `canTest` and `canDebug` also offer **Debug Test
+Target**. Select one whole target. The client saves changes, builds first when
+the target supports compilation, and starts the normal VS Code debugger.
+Use the debug toolbar to stop the session. Individual cases and case exclusions
+are not supported for debugging. Debug sessions do not publish per-case results
+to Testing; use **Run Tests** for those results.
+
+Coverage is not available. Standard BSP has no coverage capability field, so
+`canTest` alone does not enable a Coverage profile.
+
 With an updated sourcekit-bsp, the Swift discovery adapter finds XCTest and Swift
 Testing functions in SwiftPM packages and Xcode projects before execution. Open a
 test file and use the play button beside a test or suite. The same tests appear under their target in the Testing
@@ -258,8 +268,8 @@ that support testing but cannot run as an executable do not show a disabled Run
 icon. Debug remains a separate action when the server advertises `canDebug`.
 
 UI tests, physical-device test debugging, and individual test debugging are not
-supported yet. This entry is in BSP Targets; the Testing panel's Run Tests
-profile keeps its existing behavior and result reports.
+supported yet. The Testing panel's **Debug Test Target** profile uses the same
+debug path. Its **Run Tests** profile keeps its existing behavior and result reports.
 
 ### Activation
 

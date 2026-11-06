@@ -261,7 +261,7 @@ export class BspClient {
         });
     }
 
-    compile(target: BuildTarget): Promise<CompileResult> {
+    compile(target: BuildTarget, token?: vscode.CancellationToken): Promise<CompileResult> {
         const targetId = target.id.uri;
         
         return this.executeWithProgress('compile', targetId, async (originId, cancellation) => {
@@ -299,7 +299,7 @@ export class BspClient {
             const result: CompileResult = await this.connection.sendRequest('buildTarget/compile', params, cancellation);
             this.handleCompileResult(result);
             return result;
-        });
+        }, { token });
     }
 
     async test(target: BuildTarget, options: BspTestOptions = {}): Promise<TestResult> {
@@ -397,11 +397,11 @@ export class BspClient {
         return this.debugTarget(target, target.capabilities?.canTest === true && !target.capabilities.canRun);
     }
 
-    debugTests(target: BuildTarget): Promise<DebugSessionAddressResult> {
-        return this.debugTarget(target, true);
+    debugTests(target: BuildTarget, token?: vscode.CancellationToken): Promise<DebugSessionAddressResult> {
+        return this.debugTarget(target, true, token);
     }
 
-    private debugTarget(target: BuildTarget, testing: boolean): Promise<DebugSessionAddressResult> {
+    private debugTarget(target: BuildTarget, testing: boolean, token?: vscode.CancellationToken): Promise<DebugSessionAddressResult> {
         return this.executeWithProgress('debug', target.id.uri, async (originId, cancellation) => {
             if (testing && (!target.capabilities.canTest || !target.capabilities.canDebug)) {
                 throw new Error('This build target does not support test debugging');
@@ -416,7 +416,7 @@ export class BspClient {
             }
             await this.startVSCodeDebugSession(configuration);
             return result;
-        });
+        }, { token });
     }
 
     prepareDebugConfiguration(target: BuildTarget, token?: vscode.CancellationToken): Promise<vscode.DebugConfiguration> {

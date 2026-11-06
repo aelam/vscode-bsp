@@ -293,3 +293,31 @@ test('test targets use the debug icon with test arguments and do not stop at ent
         await assert.rejects(client.debug(target), /Invalid test destination/);
     } finally { client.debugSessions.dispose(); starts.length = 0; }
 });
+
+
+for (const action of ['compile', 'debugTests']) {
+    test(`${action} forwards cancellation from Testing and releases the target`, async () => {
+        const client = new BspClient(folder.uri), source = new CancellationTokenSource();
+        const target = { id: { uri: 'target://tests' }, capabilities: { canTest: true, canDebug: true } };
+        let receivedToken, started;
+        const ready = new Promise(resolve => { started = resolve; });
+        client.connection = { sendRequest: (_method, _params, token) => new Promise((_resolve, reject) => {
+            receivedToken = token;
+            token.onCancellationRequested(() => reject(new Error('Cancelled by Testing')));
+            started();
+        }) };
+        try {
+            const pending = client[action](target, source.token);
+            const rejected = assert.rejects(pending, /Cancelled by Testing/);
+            await ready; source.cancel(); await rejected;
+            assert.equal(receivedToken.isCancellationRequested, true);
+            assert.equal(starts.length, 0);
+            assert.equal(client.getActiveRequests().size, 0);
+            assert.equal(client.operations.get(target.id.uri), undefined);
+            client.connection.sendRequest = async () => action === 'compile' ? { statusCode: 1 }
+                : { uri: 'tcp://127.0.0.1:25001', data: { request: 'attach', pid: 1234 } };
+            await client[action](target);
+            assert.equal(starts.length, action === 'debugTests' ? 1 : 0);
+        } finally { source.dispose(); client.debugSessions.dispose(); starts.length = 0; }
+    });
+}
