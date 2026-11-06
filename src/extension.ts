@@ -658,6 +658,10 @@ async function initializeBspExtension(context: vscode.ExtensionContext) {
             vscode.window.showErrorMessage('BSP server not connected');
             return;
         }
+        if (!client.supportsOutputPaths) {
+            void vscode.window.showInformationMessage('This BSP server does not provide build output paths.');
+            return;
+        }
         try {
             await revealBuildOutput(client, selected.buildTarget);
         } catch (error) {

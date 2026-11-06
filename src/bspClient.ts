@@ -86,6 +86,7 @@ export class BspClient {
     }
 
     get supportsTesting(): boolean { return this.serverCapabilities.testProvider !== undefined; }
+    get supportsOutputPaths(): boolean { return this.serverCapabilities.outputPathsProvider === true; }
 
 
     constructor(workspaceUri: vscode.Uri, private configPath?: string, onTargetsUpdated?: () => void, private buildSystemManager?: any) {
@@ -200,7 +201,7 @@ export class BspClient {
 
     async getOutputPaths(target: BuildTarget): Promise<OutputPathItem[]> {
         if (!this.connection) { throw new Error('BSP client not connected'); }
-        if (!this.serverCapabilities.outputPathsProvider) {
+        if (!this.supportsOutputPaths) {
             throw new Error('This BSP server does not provide build output paths');
         }
         const result: OutputPathsResult = await this.connection.sendRequest('buildTarget/outputPaths', {

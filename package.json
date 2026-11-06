@@ -431,7 +431,7 @@
         },
         {
           "command": "bsp.revealBuildOutput",
-          "when": "view == bspTargets && viewItem =~ /buildTarget/ && !(viewItem =~ /disconnected|loading/)",
+          "when": "view == bspTargets && viewItem =~ /buildTarget.*canRevealBuildOutput/ && !(viewItem =~ /disconnected|loading/)",
           "group": "navigation@2"
         },
         {

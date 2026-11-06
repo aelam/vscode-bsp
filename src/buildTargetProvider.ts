@@ -12,7 +12,15 @@ export class BuildTargetProvider implements vscode.TreeDataProvider<BuildTargetI
         this._onDidChangeTreeData.fire();
     }
 
-    getTreeItem(element: BuildTargetItem): vscode.TreeItem {
+    getTreeItem(element: BuildTargetItem): BuildTargetItem {
+        if (element.itemType === 'buildTarget') {
+            const contextValues = (element.contextValue ?? 'buildTarget').split(' ')
+                .filter(value => value !== 'canRevealBuildOutput');
+            if (this.bspClient.connected && this.bspClient.supportsOutputPaths) {
+                contextValues.push('canRevealBuildOutput');
+            }
+            element.contextValue = contextValues.join(' ');
+        }
         return element;
     }
 
@@ -25,7 +33,9 @@ export class BuildTargetProvider implements vscode.TreeDataProvider<BuildTargetI
             // Root level - show all build targets
             try {
                 const targets = await this.bspClient.getBuildTargets();
-                return targets.map(target => new BuildTargetItem(target, vscode.TreeItemCollapsibleState.Collapsed));
+                return targets.map(target => this.getTreeItem(
+                    new BuildTargetItem(target, vscode.TreeItemCollapsibleState.Collapsed)
+                ));
             } catch (error) {
                 console.error('Error getting build targets:', error);
                 vscode.window.showErrorMessage(`Failed to load build targets: ${error}`);

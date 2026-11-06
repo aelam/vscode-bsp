@@ -42,10 +42,11 @@ const vscode = {
 };
 const load = Module._load;
 Module._load = function(name, ...args) { return name === 'vscode' ? vscode : load.call(this, name, ...args); };
-let BspClient, MultiBspProvider, BspTreeItem, BspStatusBar, BspDebugConfigurationProvider, cleanBuildCache;
+let BspClient, MultiBspProvider, BspTreeItem, BuildTargetProvider, BspStatusBar, BspDebugConfigurationProvider, cleanBuildCache;
 try {
     ({ BspClient } = require('../out/bspClient'));
     ({ MultiBspProvider, BspTreeItem } = require('../out/multiBspProvider'));
+    ({ BuildTargetProvider } = require('../out/buildTargetProvider'));
     ({ BspStatusBar } = require('../out/bspStatusBar'));
     ({ BspDebugConfigurationProvider } = require('../out/debugProvider'));
     ({ cleanBuildCache } = require('../out/cleanCache'));
@@ -341,4 +342,55 @@ test('clean state appears on normal and favorite rows with no cancel action', as
     assert.match(menus.find(m => m.command === 'bsp.cancelOperation').when, /nonCancellable/);
     c.requests[0].resolve({ cleaned: true }); await pending;
     assert.match(provider.getTreeItem(make('server-0', true)).contextValue, /canCleanCache/);
+});
+
+
+test('output support follows each server on normal, favorite, and legacy rows', async () => {
+    const a = client(), b = client(), m = manager([a, b]);
+    a.buildTargets = [target('shared'), target('a')];
+    b.buildTargets = [target('shared'), target('b')];
+    const context = { workspaceState: { get: () => ['target://a', 'target://b'] } };
+    const provider = new MultiBspProvider(m, context, { onDidChangeConfiguration: () => ({ dispose() {} }), canHandle: () => false });
+    m.changes.fire();
+    const roots = await provider.getChildren(), group = roots.find(item => item.type === 'favoritesGroup');
+    const normal = (await Promise.all(roots.filter(item => item.type === 'connection').map(item => provider.getChildren(item)))).flat();
+    const favorites = await provider.getChildren(group);
+    const legacy = new BuildTargetProvider(a);
+    a.getBuildTargets = async () => a.targets;
+    const [legacyRow] = await legacy.getChildren();
+    const supports = item => /\bcanRevealBuildOutput\b/.test(item.contextValue ?? '');
+    const menu = require('../package.json').contributes.menus['view/item/context'].find(item => item.command === 'bsp.revealBuildOutput');
+    assert.match(menu.when, /buildTarget\.\*canRevealBuildOutput/);
+    assert.match(menu.when, /!\(viewItem =~ \/disconnected\|loading\/\)/);
+    assert.equal(normal.length, 4);
+    assert.equal(favorites.length, 2);
+    for (const [advertised, connected, clientConnected] of [
+        [undefined, true, true], [true, true, true], [false, true, true],
+        [true, true, true], [undefined, true, true], [true, true, false], [true, false, true], [true, true, true]
+    ]) {
+        a.serverCapabilities = advertised === undefined ? {} : { outputPathsProvider: advertised };
+        b.serverCapabilities.outputPathsProvider = advertised !== true;
+        a.isConnected = clientConnected;
+        m.connections[0].connected = connected;
+        m.changes.fire();
+        const freshFavorites = await provider.getChildren(group);
+        for (const item of [...normal, ...favorites, ...freshFavorites]) {
+            const expected = item.connectionId === 'server-0' ? advertised === true && connected && clientConnected : advertised !== true;
+            assert.equal(supports(provider.getTreeItem(item)), expected, item.label);
+        }
+        for (const item of [...favorites, ...freshFavorites]) { assert.match(item.contextValue, /favorite/); }
+        assert.equal(supports(legacy.getTreeItem(legacyRow)), advertised === true && clientConnected);
+        for (const item of await legacy.getChildren()) { assert.equal(supports(item), advertised === true); }
+        if (!clientConnected) { assert.deepEqual(await legacy.getChildren(), []); }
+    }
+    for (const detail of await legacy.getChildren(legacyRow)) { assert.equal(supports(legacy.getTreeItem(detail)), false); }
+    a.buildTargets = [];
+    const loading = (await provider.getChildren(group)).find(item => item.connectionId === 'server-0');
+    assert.match(loading.contextValue, /loading/);
+    assert.equal(supports(provider.getTreeItem(loading)), false);
+    m.connections.splice(0, 1);
+    for (const item of [...normal, ...favorites].filter(item => item.connectionId === 'server-0')) {
+        assert.equal(supports(provider.getTreeItem(item)), false);
+    }
+    assert.equal(a.requests.length + b.requests.length, 0);
 });
