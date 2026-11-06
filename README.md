@@ -223,9 +223,19 @@ existing nodes; failures include messages and links to their source.
 The adapter uses SourceKit-LSP from the server's advertised toolchain. It runs a
 separate discovery session with background indexing disabled, without access to
 private Swift extension APIs. It requires SourceKit-LSP test discovery version 2
-and one Swift/C-family `.bsp/*.json` configuration per workspace folder. Source
-edits refresh locations automatically; the Testing panel's Refresh action retries
-discovery.
+and exactly one valid Swift/C-family BSP configuration in the workspace's `.bsp`
+directory, matching the selected connection. Source edits refresh locations
+automatically; the Testing panel's Refresh action retries discovery.
+
+Multiple Swift/C-family connections can share one workspace root for target-level
+Compile, Run, Test, and Debug when the servers advertise those actions.
+SourceKit-LSP 6.4 cannot select a BSP configuration by path or name. With multiple
+matching configurations, the adapter reports ambiguous test discovery and does
+not populate individual cases or source locations from another connection.
+SourceKit-LSP attempts to decode every entry in `.bsp`, including files named
+`*.json.disabled`. Move inactive configurations outside `.bsp`; changing the
+suffix does not disable them for SourceKit-LSP. Invalid JSON and entries that
+lack the required BSP fields are ignored.
 SwiftPM uses the toolchain reported by the selected Swift executable, including
 executables managed through shims. If that toolchain has no SourceKit-LSP,
 target-level testing remains available, but case discovery is unavailable.

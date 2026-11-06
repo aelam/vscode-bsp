@@ -71,7 +71,8 @@ test('SwiftPM discovery opens source files, keeps case locations, and sends exac
     t.after(() => fs.rm(root, { recursive: true, force: true }));
     await fs.mkdir(path.join(root, '.bsp'));
     const configPath = path.join(root, '.bsp/sourcekit-bsp.json');
-    await fs.writeFile(configPath, JSON.stringify({ languages: ['swift'] }));
+    await fs.writeFile(configPath, JSON.stringify({ name: 'SourceKit', version: '0.2', bspVersion: '2.2.0',
+        languages: ['swift'], argv: ['sourcekit-bsp'] }));
     const file = path.join(root, 'DemoTests.swift');
     const uri = pathToFileURL(file).href;
     await fs.writeFile(file, '@Test func namedGreeting() {}');
