@@ -202,16 +202,20 @@ Configuration and destination selections come from the BSP Targets view.
 The Stop button cancels the corresponding BSP request.
 
 With an updated sourcekit-bsp, the Swift discovery adapter finds XCTest and Swift
-Testing functions before execution. Open a test file and use the play button
-beside a test or suite. The same tests appear under their target in the Testing
+Testing functions in SwiftPM packages and Xcode projects before execution. Open a
+test file and use the play button beside a test or suite. The same tests appear under their target in the Testing
 panel. You can select cases or exclude cases from a run. Results update the
 existing nodes; failures include messages and links to their source.
 
 The adapter uses SourceKit-LSP from the server's advertised toolchain. It runs a
 separate discovery session with background indexing disabled, without access to
 private Swift extension APIs. It requires SourceKit-LSP test discovery version 2
-and one `.bsp/*.json` configuration per workspace folder. Source edits refresh
-locations automatically; the Testing panel's Refresh action retries discovery.
+and one Swift/C-family `.bsp/*.json` configuration per workspace folder. Source
+edits refresh locations automatically; the Testing panel's Refresh action retries
+discovery.
+SwiftPM uses the toolchain reported by the selected Swift executable, including
+executables managed through shims. If that toolchain has no SourceKit-LSP,
+target-level testing remains available, but case discovery is unavailable.
 Selected source files are saved before execution.
 
 Other BSP servers retain target execution and standard `test-start`,
@@ -253,7 +257,7 @@ Test targets use the double-check **Build and Test** icon to run tests. Targets
 that support testing but cannot run as an executable do not show a disabled Run
 icon. Debug remains a separate action when the server advertises `canDebug`.
 
-UI tests, physical-device test debugging, and individual test selection are not
+UI tests, physical-device test debugging, and individual test debugging are not
 supported yet. This entry is in BSP Targets; the Testing panel's Run Tests
 profile keeps its existing behavior and result reports.
 
