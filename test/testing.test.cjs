@@ -9,6 +9,7 @@ class Collection extends Map {
     replace(items) { for (const item of this.values()) { item.parent = undefined; } this.clear(); items.forEach(item => this.add(item)); }
 }
 const controllers = [];
+const messages = [];
 class Range {
     constructor(line, character, endLine, endCharacter) {
         this.start = { line, character }; this.end = { line: endLine, character: endCharacter };
@@ -17,9 +18,14 @@ class Range {
 const vscode = {
     tests: { createTestController: () => {
         const controller = {
-            items: new Collection(), runs: [],
+            items: new Collection(), runs: [], profiles: [],
             createTestItem(id, label, uri) { const item = { id, label, uri, tags: [] }; item.children = new Collection(item); return item; },
-            createRunProfile(_label, _kind, handler, _default, tag) { this.handler = handler; this.tag = tag; },
+            createRunProfile(label, kind, handler, _default, tag) {
+                const profile = { label, kind, handler, tag, disposed: false, dispose() { this.disposed = true; } };
+                this.profiles.push(profile);
+                if (kind === 1) { this.handler = handler; this.tag = tag; }
+                return profile;
+            },
             createTestRun(request) {
                 const source = new CancellationTokenSource();
                 const run = { request, source, token: source.token, records: [], ended: 0,
@@ -36,7 +42,9 @@ const vscode = {
     } },
     TestTag: class { constructor(id) { this.id = id; } },
     TestRunRequest: class { constructor(include, exclude) { this.include = include; this.exclude = exclude; } },
-    TestRunProfileKind: { Run: 1 },
+    TestRunProfileKind: { Run: 1, Debug: 2 },
+    window: { showErrorMessage: message => { messages.push(message); } },
+    workspace: { textDocuments: [] },
     TestMessage: class { constructor(message) { this.message = message; } },
     Uri: { file: path => ({ toString: () => 'file://' + path }), parse: uri => ({ toString: () => uri }) },
     Range,
@@ -58,7 +66,9 @@ function target(name = 'Tests', canTest = true) {
 function client(targets = [target()]) {
     const events = emitter(); let number = 0;
     return {
-        connected: true, supportsTesting: true, targets, events, calls: [],
+        connected: true, supportsTesting: true, targets, events, calls: [], debugCalls: [],
+        async compile(target, token) { this.debugCalls.push({ kind: 'compile', target, token }); return { statusCode: 1 }; },
+        async debugTests(target, token) { this.debugCalls.push({ kind: 'debug', target, token }); return {}; },
         onTestEvent: events.event,
         async getBuildTargets() { events.fire({ kind: 'targets' }); return this.targets; },
         emit(event) { events.fire(event); },
@@ -408,4 +418,138 @@ test('target fallback cannot override an explicit unrelated origin or another co
     assert.deepEqual([...s.targets()[0].children.values()].map(item => item.label), ['correct']);
     assert.equal(s.targets()[1].children.size, 0);
     s.testing.dispose();
+});
+
+
+const debugProfile = controller => controller.profiles.find(p => p.kind === 2 && !p.disposed);
+function debugTarget(name = 'Tests', canCompile = true) {
+    return { ...target(name), capabilities: { canTest: true, canDebug: true, canCompile } };
+}
+
+test('Debug profile follows target capabilities without enabling case debugging', async () => {
+    const s = discoverable();
+    assert.equal(debugProfile(s.controller), undefined);
+    s.c.targets = [debugTarget()]; s.updates.fire();
+    const profile = debugProfile(s.controller);
+    assert.ok(profile);
+    assert.ok(s.targetItem().tags.includes(profile.tag));
+    await s.controller.refreshHandler(CancellationToken.None);
+    for (const suite of s.targetItem().children.values()) {
+        assert.ok(!suite.tags.includes(profile.tag));
+        for (const item of suite.children.values()) { assert.ok(!item.tags.includes(profile.tag)); }
+    }
+    s.c.targets = [target()]; s.updates.fire();
+    assert.equal(profile.disposed, true);
+    assert.equal(debugProfile(s.controller), undefined);
+    assert.ok(!s.targetItem().tags.includes(profile.tag));
+    s.c.targets = [debugTarget()]; s.updates.fire();
+    const replacement = debugProfile(s.controller);
+    assert.ok(replacement); assert.notEqual(profile, replacement);
+    s.c.connected = false; s.c.emit({ kind: 'disconnected' });
+    assert.equal(replacement.disposed, true);
+    s.testing.dispose();
+});
+
+test('Debug saves and builds the selected target on the correct connection', async () => {
+    const a = client([debugTarget()]), b = client([debugTarget()]), s = setup([a, b]);
+    const order = [];
+    vscode.workspace.textDocuments = [{ isDirty: true, async save() { order.push('save'); return true; } }];
+    const compile = b.compile, debug = b.debugTests;
+    b.compile = async function(...args) { order.push('compile'); return compile.apply(this, args); };
+    b.debugTests = async function(...args) { order.push('debug'); return debug.apply(this, args); };
+    try {
+        await debugProfile(s.controller).handler(request([s.targets()[1]]), CancellationToken.None);
+        assert.deepEqual(order, ['save', 'compile', 'debug']);
+        assert.equal(a.debugCalls.length, 0);
+        assert.deepEqual(b.debugCalls.map(call => call.kind), ['compile', 'debug']);
+        assert.equal(b.debugCalls[0].target, b.targets[0]);
+        assert.equal(b.debugCalls[1].token, b.debugCalls[0].token);
+        assert.equal(b.calls.length, 0);
+        assert.equal(s.controller.runs.length, 0);
+    } finally { vscode.workspace.textDocuments = []; s.testing.dispose(); }
+});
+
+test('Debug honors target exclusions and works without compile capability', async () => {
+    const c = client([debugTarget('First'), debugTarget('Second', false), target('RunOnly')]), s = setup([c]);
+    await debugProfile(s.controller).handler(request(undefined, [s.targets()[0]]), CancellationToken.None);
+    assert.deepEqual(c.debugCalls.map(call => [call.kind, call.target.id.uri]), [['debug', 'target://Second']]);
+    s.testing.dispose();
+});
+
+test('Debug rejects individual cases, partial exclusions, and multiple targets', async () => {
+    const s = discoverable(); s.c.targets = [debugTarget()]; s.updates.fire();
+    await s.controller.refreshHandler(CancellationToken.None);
+    const [leaf] = [...s.leaves().values()], suite = [...s.targetItem().children.values()][0];
+    const before = messages.length;
+    for (const selected of [request([leaf]), request([suite]), request([s.targetItem()], [leaf])]) {
+        await debugProfile(s.controller).handler(selected, CancellationToken.None);
+    }
+    assert.equal(messages.length, before + 3);
+    assert.equal(s.c.debugCalls.length, 0);
+    s.testing.dispose();
+    const c = client([debugTarget('First'), debugTarget('Second')]), multi = setup([c]);
+    await debugProfile(multi.controller).handler(request(), CancellationToken.None);
+    assert.match(messages.at(-1), /Select one test target/);
+    assert.equal(c.debugCalls.length, 0);
+    multi.testing.dispose();
+});
+
+test('Debug does not start after a failed build or an unsuccessful save', async () => {
+    const c = client([debugTarget()]), s = setup([c]);
+    c.compile = async () => ({ statusCode: 2 });
+    const profile = debugProfile(s.controller), selected = request(s.targets());
+    await profile.handler(selected, CancellationToken.None);
+    assert.match(messages.at(-1), /Build failed/);
+    assert.equal(c.debugCalls.length, 0);
+    vscode.workspace.textDocuments = [{ isDirty: true, async save() { return false; } }];
+    c.compile = () => assert.fail('Do not build unsaved sources');
+    try {
+        await profile.handler(selected, CancellationToken.None);
+        assert.match(messages.at(-1), /Save test files/);
+        assert.equal(c.debugCalls.length, 0);
+    } finally { vscode.workspace.textDocuments = []; s.testing.dispose(); }
+});
+
+test('Debug cancels startup when its request or target becomes unavailable', async () => {
+    for (const reason of ['request', 'disconnect', 'remove', 'capability', 'dispose']) {
+        const c = client([debugTarget()]), s = setup([c]), source = new CancellationTokenSource();
+        let release, receivedToken;
+        c.compile = (_target, token) => new Promise(resolve => { release = resolve; receivedToken = token; });
+        const before = messages.length;
+        const pending = debugProfile(s.controller).handler(request(s.targets()), source.token);
+        await tick();
+        if (reason === 'request') { source.cancel(); }
+        if (reason === 'disconnect') { c.connected = false; c.emit({ kind: 'disconnected' }); }
+        if (reason === 'remove') { c.targets = []; s.updates.fire(); }
+        if (reason === 'capability') { c.targets = [target()]; s.updates.fire(); }
+        if (reason === 'dispose') { s.testing.dispose(); }
+        assert.equal(receivedToken.isCancellationRequested, true, reason);
+        release({ statusCode: 1 }); await pending;
+        assert.equal(c.debugCalls.length, 0, reason);
+        assert.equal(messages.length, before, reason);
+        source.dispose(); s.testing.dispose();
+    }
+});
+
+test('Debug and Run cannot overlap while Debug starts, and startup releases its reservation', async () => {
+    const c = client([debugTarget()]), s = setup([c]); let release;
+    c.compile = () => new Promise(resolve => { release = resolve; });
+    const profile = debugProfile(s.controller), selected = request(s.targets());
+    const first = profile.handler(selected, CancellationToken.None); await tick();
+    await profile.handler(selected, CancellationToken.None);
+    assert.match(messages.at(-1), /already running/);
+    await s.controller.handler(selected, CancellationToken.None);
+    assert.equal(c.calls.length, 0);
+    assert.ok(s.controller.runs[0].records.some(r => r[0] === 'errored'));
+    release({ statusCode: 1 }); await first;
+    assert.equal(c.debugCalls.length, 1);
+    c.compile = async () => ({ statusCode: 1 });
+    await profile.handler(selected, CancellationToken.None);
+    assert.equal(c.debugCalls.length, 2);
+    c.execute = () => new Promise(resolve => { release = resolve; });
+    const run = s.controller.handler(selected, CancellationToken.None); await tick();
+    await profile.handler(selected, CancellationToken.None);
+    assert.match(messages.at(-1), /already running/);
+    assert.equal(c.debugCalls.length, 2);
+    release(1); await run; s.testing.dispose();
 });
