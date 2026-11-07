@@ -553,3 +553,51 @@ test('Debug and Run cannot overlap while Debug starts, and startup releases its 
     assert.equal(c.debugCalls.length, 2);
     release(1); await run; s.testing.dispose();
 });
+
+test('context-aware test debugging uses debug preparation without a separate compile', async () => {
+    const c = client([debugTarget()]); c.contexts = { enabled: true };
+    const s = setup([c]);
+    await debugProfile(s.controller).handler(request(s.targets()), CancellationToken.None);
+    assert.deepEqual(c.debugCalls.map(call => call.kind), ['debug']);
+    s.testing.dispose();
+});
+
+test('one workspace test request keeps target results separate under a shared origin', () => {
+    const first = target('First'), second = target('Second'), c = client([first, second]), s = setup([c]);
+    for (const current of [first, second]) {
+        c.emit({ kind: 'started', originId: 'workspace-test', target: current, cancel() {} });
+    }
+    c.emit({ kind: 'taskStart', params: { taskId: { id: 'root' }, originId: 'workspace-test' } });
+    for (const [index, current] of [first, second].entries()) {
+        const group = 'group-' + index;
+        c.emit({ kind: 'taskStart', params: { taskId: { id: group, parents: ['root'] }, originId: 'workspace-test',
+            dataKind: 'test-task', data: { target: current.id } } });
+        c.emit({ kind: 'taskStart', params: { taskId: { id: 'case-' + index, parents: [group] }, originId: 'workspace-test',
+            dataKind: 'test-start', data: { displayName: 'case-for-' + current.displayName } } });
+        c.emit({ kind: 'taskFinish', params: { taskId: { id: 'case-' + index, parents: [group] }, originId: 'workspace-test',
+            status: 1, dataKind: 'test-finish', data: { displayName: 'case-for-' + current.displayName, status: 1 } } });
+        c.emit({ kind: 'taskFinish', params: { taskId: { id: group, parents: ['root'] }, originId: 'workspace-test',
+            status: 1, dataKind: 'test-report', data: { target: current.id, passed: 1, failed: 0, ignored: 0, cancelled: 0, skipped: 0 } } });
+    }
+    c.emit({ kind: 'finished', originId: 'workspace-test', status: 1 });
+    assert.equal(s.controller.runs.length, 2);
+    for (const [index, run] of s.controller.runs.entries()) {
+        assert.equal(run.ended, 1);
+        const labels = run.records.filter(record => record[0] === 'passed').map(record => record[1].label);
+        assert.ok(labels.includes('case-for-' + [first, second][index].displayName));
+        assert.ok(!labels.includes('case-for-' + [second, first][index].displayName));
+    }
+    s.testing.dispose();
+});
+
+test('an explicit unrelated origin cannot reuse an active task or its parent', () => {
+    const c = client(), s = setup([c]);
+    c.emit({ kind: 'started', originId: 'active', target: target(), cancel() {} });
+    start(c, 'active');
+    for (const taskId of [{ id: 'group' }, { id: 'unrelated-case', parents: ['group'] }]) {
+        c.emit({ kind: 'taskStart', params: { taskId, originId: 'unrelated', dataKind: 'test-start', data: { displayName: 'wrong-case' } } });
+    }
+    assert.ok(!s.controller.runs[0].records.some(record => record[1]?.label === 'wrong-case'));
+    c.emit({ kind: 'finished', originId: 'active', status: 1 });
+    s.testing.dispose();
+});

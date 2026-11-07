@@ -12,7 +12,7 @@ import type { TestDiscoveryFactory } from './testDiscovery';
 
 interface Target { item: vscode.TestItem; connectionId: string; client: BspClient; target: BuildTarget }
 interface Session {
-    state: BspTestRun; connectionId: string; owned: boolean;
+    state: BspTestRun; connectionId: string; originId: string; owned: boolean;
     cancellation: vscode.Disposable; cancel: () => void;
 }
 
@@ -156,7 +156,7 @@ export class BspTesting implements vscode.Disposable {
                 if (document.isDirty && !await document.save()) { throw new Error('Save test files before debugging tests'); }
             }
             if (source.token.isCancellationRequested) { return; }
-            if (entry.target.capabilities.canCompile) {
+            if (entry.target.capabilities.canCompile && !entry.client.contexts?.enabled) {
                 const result = await entry.client.compile(entry.target, source.token);
                 if (source.token.isCancellationRequested || result.statusCode === StatusCode.Cancelled) { return; }
                 if (result.statusCode !== StatusCode.Ok) { throw new Error('Build failed. The test debugger was not started.'); }
@@ -294,17 +294,25 @@ export class BspTesting implements vscode.Disposable {
             const session: Session = {
                 state: new BspTestRun(this.controller, run, entry.item, event.target.id.uri,
                     catalog ? { items: new Map(catalog), selected: prepared?.selected } : undefined),
-                connectionId, owned: !prepared,
+                connectionId, originId: event.originId, owned: !prepared,
                 cancellation: run.token.onCancellationRequested(event.cancel), cancel: event.cancel
             };
             this.activeTargets.add(entry.item.id);
-            this.sessions.set(this.key(connectionId, event.originId), session);
+            this.sessions.set(this.key(connectionId, JSON.stringify([event.originId, event.target.id.uri])), session);
             if (run.token.isCancellationRequested) { event.cancel(); }
         } else if (event.kind === 'finished') {
-            this.finish(this.key(connectionId, event.originId), event.status, event.error);
+            for (const [key, session] of this.sessions) {
+                if (session.connectionId === connectionId && session.originId === event.originId) {
+                    this.finish(key, event.status, event.error);
+                }
+            }
         } else if (event.kind === 'log') {
             if (event.params.originId) {
-                this.sessions.get(this.key(connectionId, event.params.originId))?.state.log(event.params.message, event.params.type);
+                for (const session of this.sessions.values()) {
+                    if (session.connectionId === connectionId && session.originId === event.params.originId) {
+                        session.state.log(event.params.message, event.params.type);
+                    }
+                }
             }
         } else if ('params' in event) {
             const owner = this.owner(connectionId, event.params);
@@ -320,21 +328,23 @@ export class BspTesting implements vscode.Disposable {
     }
 
     private owner(connectionId: string, params: TaskStartParams): string | undefined {
-        if (params.originId) {
-            const key = this.key(connectionId, params.originId);
-            return this.sessions.has(key) ? key : undefined;
-        }
-        const known = this.taskOwners.get(this.key(connectionId, taskId(params.taskId)));
-        if (known) { return known; }
-        const parents = typeof params.taskId === 'string' ? [] : params.taskId.parents ?? [];
-        const parent = parents.map(parent => this.taskOwners.get(this.key(connectionId, parent))).find(owner => owner !== undefined);
-        if (parent) { return parent; }
         const target = ['test-task', 'test-report'].includes(params.dataKind ?? '')
             ? object(object(params.data)?.target)?.uri : undefined;
-        if (typeof target !== 'string') { return undefined; }
+        const compatible = (key: string | undefined) => {
+            const session = key ? this.sessions.get(key) : undefined;
+            return !!session && (!params.originId || session.originId === params.originId)
+                && (typeof target !== 'string' || session.state.targetUri === target);
+        };
+        const known = this.taskOwners.get(this.key(connectionId, taskId(params.taskId)));
+        if (compatible(known)) { return known; }
+        const parents = typeof params.taskId === 'string' ? [] : params.taskId.parents ?? [];
+        const parent = parents.map(parent => this.taskOwners.get(this.key(connectionId, parent))).find(compatible);
+        if (parent) { return parent; }
         // Some servers omit originId and identify the test request by its target.
         const matches = [...this.sessions].filter(([, session]) => session.connectionId === connectionId
-            && session.state.targetUri === target);
+            && (!params.originId || session.originId === params.originId)
+            && (typeof target !== 'string' || session.state.targetUri === target)
+            && (params.originId || typeof target === 'string'));
         return matches.length === 1 ? matches[0][0] : undefined;
     }
 

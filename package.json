@@ -23,7 +23,9 @@
       "properties": {
         "bsp.debug.lldbInitCommands": {
           "type": "array",
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "default": [],
           "scope": "resource",
           "restricted": true,
@@ -73,7 +75,9 @@
             "properties": {
               "initCommands": {
                 "type": "array",
-                "items": { "type": "string" },
+                "items": {
+                  "type": "string"
+                },
                 "description": "Adapter initialization commands. For LLDB, overrides bsp.debug.lldbInitCommands for this launch configuration."
               },
               "connect": {
@@ -129,7 +133,9 @@
             "properties": {
               "initCommands": {
                 "type": "array",
-                "items": { "type": "string" },
+                "items": {
+                  "type": "string"
+                },
                 "description": "Adapter initialization commands."
               },
               "connect": {
@@ -255,8 +261,8 @@
       },
       {
         "command": "bsp.debug",
-        "title": "Build and Debug Target (Build First)",
-        "shortTitle": "Build and Debug Target",
+        "title": "Debug Target",
+        "shortTitle": "Debug Target",
         "category": "BSP",
         "icon": "$(debug-alt)"
       },
@@ -269,7 +275,7 @@
       },
       {
         "command": "bsp.cleanCache",
-        "title": "Clean Build Cache…",
+        "title": "Clean Build Cache\u2026",
         "category": "BSP",
         "icon": "$(clear-all)"
       },
@@ -281,7 +287,7 @@
       },
       {
         "command": "bsp.revealTargetFolder",
-        "title": "Navigate to Folder…",
+        "title": "Navigate to Folder\u2026",
         "category": "BSP",
         "icon": "$(folder-opened)"
       },
@@ -394,6 +400,75 @@
         "title": "Debug Tests",
         "category": "BSP",
         "icon": "$(debug-alt)"
+      },
+      {
+        "command": "bsp.configureContext",
+        "title": "Configure Execution Context",
+        "category": "BSP",
+        "icon": "$(settings-gear)"
+      },
+      {
+        "command": "bsp.selectContextDimension",
+        "title": "Select Configuration",
+        "category": "BSP",
+        "icon": "$(list-selection)"
+      },
+      {
+        "command": "bsp.executeContext",
+        "title": "Execute with This Context",
+        "category": "BSP",
+        "icon": "$(play)"
+      },
+      {
+        "command": "bsp.refreshContexts",
+        "title": "Refresh Execution Contexts",
+        "category": "BSP",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "bsp.contextCompile",
+        "title": "Compile with This Context",
+        "category": "BSP",
+        "icon": "$(rocket)"
+      },
+      {
+        "command": "bsp.contextRun",
+        "title": "Run with This Context",
+        "category": "BSP",
+        "icon": "$(triangle-right)"
+      },
+      {
+        "command": "bsp.contextTest",
+        "title": "Test with This Context",
+        "category": "BSP",
+        "icon": "$(check-all)"
+      },
+      {
+        "command": "bsp.contextDebug",
+        "title": "Debug with This Context",
+        "category": "BSP",
+        "icon": "$(debug-alt)"
+      },
+      {
+        "command": "bsp.contextRunWithoutBuilding",
+        "title": "Run Without Building with This Context",
+        "category": "BSP"
+      },
+      {
+        "command": "bsp.contextTestWithoutBuilding",
+        "title": "Test Without Building with This Context",
+        "category": "BSP"
+      },
+      {
+        "command": "bsp.contextDebugWithoutBuilding",
+        "title": "Debug Without Building with This Context",
+        "category": "BSP"
+      },
+      {
+        "command": "bsp.configureOperationContext",
+        "title": "Override Shared Configuration for an Operation",
+        "category": "BSP",
+        "icon": "$(settings-gear)"
       }
     ],
     "views": {
@@ -401,6 +476,11 @@
         {
           "id": "bspTargets",
           "name": "BSP Targets",
+          "when": "bsp.enabled"
+        },
+        {
+          "id": "bspContexts",
+          "name": "BSP Contexts",
           "when": "bsp.enabled"
         }
       ]
@@ -420,6 +500,16 @@
         {
           "command": "bsp.disconnectAll",
           "when": "view == bspTargets && bsp.connected",
+          "group": "navigation"
+        },
+        {
+          "command": "bsp.refreshContexts",
+          "when": "view == bspContexts",
+          "group": "navigation"
+        },
+        {
+          "command": "bsp.configureContext",
+          "when": "view == bspContexts",
           "group": "navigation"
         }
       ],
@@ -441,17 +531,17 @@
         },
         {
           "command": "bsp.runWithoutBuilding",
-          "when": "view == bspTargets && viewItem =~ /buildTarget.*canRun/ && !(viewItem =~ /disconnected|loading|busy/)",
+          "when": "view == bspTargets && viewItem =~ /buildTarget.*canRun/ && !(viewItem =~ /disconnected|loading|busy/) && (!(viewItem =~ /supportsBuildContext/) || viewItem =~ /canReuseBuild/)",
           "group": "advanced@1"
         },
         {
           "command": "bsp.testWithoutBuilding",
-          "when": "view == bspTargets && viewItem =~ /buildTarget.*canTest/ && !(viewItem =~ /disconnected|loading|busy/)",
+          "when": "view == bspTargets && viewItem =~ /buildTarget.*canTest/ && !(viewItem =~ /disconnected|loading|busy/) && (!(viewItem =~ /supportsBuildContext/) || viewItem =~ /canReuseBuild/)",
           "group": "advanced@2"
         },
         {
           "command": "bsp.debugWithoutBuilding",
-          "when": "view == bspTargets && viewItem =~ /buildTarget.*canDebug/ && !(viewItem =~ /disconnected|loading|busy/)",
+          "when": "view == bspTargets && viewItem =~ /buildTarget.*canDebug/ && !(viewItem =~ /disconnected|loading|busy/) && (!(viewItem =~ /supportsBuildContext/) || viewItem =~ /canReuseBuild/)",
           "group": "advanced@3"
         },
         {
@@ -461,17 +551,17 @@
         },
         {
           "command": "bsp.test",
-          "when": "view == bspTargets && viewItem =~ /buildTarget/ && viewItem =~ /canCompile/ && viewItem =~ /canTest/ && !(viewItem =~ /busy/)",
+          "when": "view == bspTargets && viewItem =~ /buildTarget/ && viewItem =~ /canTest/ && !(viewItem =~ /busy/)",
           "group": "inline@2"
         },
         {
           "command": "bsp.run",
-          "when": "view == bspTargets && viewItem =~ /buildTarget/ && viewItem =~ /canCompile/ && viewItem =~ /canRun/ && !(viewItem =~ /busy/)",
+          "when": "view == bspTargets && viewItem =~ /buildTarget/ && viewItem =~ /canRun/ && !(viewItem =~ /busy/)",
           "group": "inline@3"
         },
         {
           "command": "bsp.debug",
-          "when": "view == bspTargets && viewItem =~ /buildTarget/ && viewItem =~ /canCompile/ && viewItem =~ /canDebug/ && !(viewItem =~ /busy/)",
+          "when": "view == bspTargets && viewItem =~ /buildTarget/ && viewItem =~ /canDebug/ && !(viewItem =~ /busy/)",
           "group": "inline@4"
         },
         {
@@ -523,6 +613,51 @@
           "command": "bsp.cancelOperation",
           "when": "view == bspTargets && viewItem =~ /buildTarget.*busy/ && !(viewItem =~ /cancelling/) && !(viewItem =~ /nonCancellable/)",
           "group": "inline@1"
+        },
+        {
+          "command": "bsp.configureContext",
+          "when": "view == bspContexts && viewItem =~ /buildContextScope/",
+          "group": "configuration@1"
+        },
+        {
+          "command": "bsp.contextCompile",
+          "when": "view == bspContexts && viewItem =~ /buildContextScope.*canCompile/",
+          "group": "inline@1"
+        },
+        {
+          "command": "bsp.contextRun",
+          "when": "view == bspContexts && viewItem =~ /buildContextScope.*canRun/",
+          "group": "inline@2"
+        },
+        {
+          "command": "bsp.contextTest",
+          "when": "view == bspContexts && viewItem =~ /buildContextScope.*canTest/",
+          "group": "inline@3"
+        },
+        {
+          "command": "bsp.contextDebug",
+          "when": "view == bspContexts && viewItem =~ /buildContextScope.*canDebug/",
+          "group": "inline@4"
+        },
+        {
+          "command": "bsp.contextRunWithoutBuilding",
+          "when": "view == bspContexts && viewItem =~ /buildContextScope.*canRun/ && viewItem =~ /canReuseBuild/",
+          "group": "advanced@1"
+        },
+        {
+          "command": "bsp.contextTestWithoutBuilding",
+          "when": "view == bspContexts && viewItem =~ /buildContextScope.*canTest/ && viewItem =~ /canReuseBuild/",
+          "group": "advanced@2"
+        },
+        {
+          "command": "bsp.contextDebugWithoutBuilding",
+          "when": "view == bspContexts && viewItem =~ /buildContextScope.*canDebug/ && viewItem =~ /canReuseBuild/",
+          "group": "advanced@3"
+        },
+        {
+          "command": "bsp.configureOperationContext",
+          "when": "view == bspContexts && viewItem =~ /buildContextScope/",
+          "group": "configuration@2"
         }
       ]
     }

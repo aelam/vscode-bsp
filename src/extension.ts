@@ -1,4 +1,5 @@
 import { BspStatusBar } from './bspStatusBar';
+import { BuildContextProvider } from './buildContextProvider';
 import { BspTesting } from './bspTesting';
 import { sourcekitTestDiscovery } from './sourcekitTestDiscovery';
 import * as vscode from 'vscode';
@@ -41,6 +42,7 @@ function getClientForSelectedTarget(selectedItem: any): BspClient | undefined {
 }
 
 async function compileBeforeTargetAction(client: BspClient, target: BuildTarget, actionName: string): Promise<boolean> {
+    if (client.contexts.enabled || !target.capabilities.canCompile) { return true; }
     try {
         const result = await client.compile(target);
         if (result.statusCode !== StatusCode.Ok) {
@@ -448,7 +450,7 @@ async function initializeBspExtension(context: vscode.ExtensionContext) {
     multiBspProvider = new MultiBspProvider(tempConnectionManager, context, buildSystemManager);
     
     // Now create the real connection manager with the shared build system manager
-    connectionManager = new BspConnectionManager(buildSystemManager);
+    connectionManager = new BspConnectionManager(buildSystemManager, context.workspaceState);
     context.subscriptions.push(connectionManager.onDidChangeConnections(() => updateConnectionContext()));
     
     // Replace the multiBspProvider with the correct connection manager, reusing the build system manager
@@ -465,7 +467,28 @@ async function initializeBspExtension(context: vscode.ExtensionContext) {
     logInfo(`🔧 Getting BuildSystemManager for BspClient: ${buildSystemManager ? 'available' : 'unavailable'}`);
     logInfo(`🔧 BuildSystemManager type: ${typeof buildSystemManager}`);
     logInfo(`🔧 BuildSystemManager instance: ${buildSystemManager?.constructor?.name}`);
-    bspClient = new BspClient(workspaceFolders[0].uri, undefined, undefined, buildSystemManager);
+    bspClient = new BspClient(workspaceFolders[0].uri, undefined, undefined, buildSystemManager, context.workspaceState);
+    const contexts = new BuildContextProvider(connectionManager, bspClient);
+    context.subscriptions.push(contexts, vscode.window.createTreeView('bspContexts', { treeDataProvider: contexts }));
+    for (const [command, action] of [
+        ['bsp.configureContext', (item: any) => contexts.configure(item)],
+        ['bsp.configureOperationContext', (item: any) => contexts.configure(item, true)],
+        ['bsp.selectContextDimension', (item: any) => contexts.selectDimension(item)],
+        ['bsp.executeContext', (item: any) => item ? contexts.execute(item) : contexts.configure()],
+        ['bsp.contextCompile', (item: any) => contexts.execute(item, 'compile')],
+        ['bsp.contextRun', (item: any) => contexts.execute(item, 'run')],
+        ['bsp.contextTest', (item: any) => contexts.execute(item, 'test')],
+        ['bsp.contextDebug', (item: any) => contexts.execute(item, 'debug')],
+        ['bsp.contextRunWithoutBuilding', (item: any) => contexts.execute(item, 'run', 'reuse')],
+        ['bsp.contextTestWithoutBuilding', (item: any) => contexts.execute(item, 'test', 'reuse')],
+        ['bsp.contextDebugWithoutBuilding', (item: any) => contexts.execute(item, 'debug', 'reuse')]
+    ] as const) {
+        context.subscriptions.push(vscode.commands.registerCommand(command, async item => {
+            try { await action(item); }
+            catch (error) { void vscode.window.showErrorMessage(`Build context: ${String(error)}`); }
+        }));
+    }
+    context.subscriptions.push(vscode.commands.registerCommand('bsp.refreshContexts', () => contexts.refresh()));
     buildTargetProvider = new BuildTargetProvider(bspClient);
     context.subscriptions.push(new BspStatusBar(connectionManager, bspClient));
     context.subscriptions.push(new BspTesting(connectionManager, bspClient, [sourcekitTestDiscovery]));
@@ -704,12 +727,12 @@ async function initializeBspExtension(context: vscode.ExtensionContext) {
     });
 
     const testCommand = vscode.commands.registerCommand('bsp.test', async (item) => {
-        const selectedItem = await getOrSelectBuildTarget(item, target => target.capabilities.canCompile && target.capabilities.canTest);
+        const selectedItem = await getOrSelectBuildTarget(item, target => target.capabilities.canTest);
         if (!selectedItem) return;
 
         logInfo(`BSP test command triggered for target: ${selectedItem?.buildTarget?.id?.uri || selectedItem?.id || 'unknown'}`);
 
-        if (selectedItem?.buildTarget?.capabilities.canCompile && selectedItem.buildTarget.capabilities.canTest) {
+        if (selectedItem?.buildTarget?.capabilities.canTest) {
             const client = getClientForSelectedTarget(selectedItem);
             if (!client) { return; }
             if (await compileBeforeTargetAction(client, selectedItem.buildTarget, 'test')) {
@@ -721,12 +744,12 @@ async function initializeBspExtension(context: vscode.ExtensionContext) {
     });
 
     const runCommand = vscode.commands.registerCommand('bsp.run', async (item) => {
-        const selectedItem = await getOrSelectBuildTarget(item, target => target.capabilities.canCompile && target.capabilities.canRun);
+        const selectedItem = await getOrSelectBuildTarget(item, target => target.capabilities.canRun);
         if (!selectedItem) return;
 
         logInfo(`BSP run command triggered for target: ${selectedItem?.buildTarget?.id?.uri || selectedItem?.id || 'unknown'}`);
 
-        if (selectedItem?.buildTarget?.capabilities.canCompile && selectedItem.buildTarget.capabilities.canRun) {
+        if (selectedItem?.buildTarget?.capabilities.canRun) {
             const client = getClientForSelectedTarget(selectedItem);
             if (!client) { return; }
             if (await compileBeforeTargetAction(client, selectedItem.buildTarget, 'run')) {
@@ -766,17 +789,17 @@ async function initializeBspExtension(context: vscode.ExtensionContext) {
         if (!selected?.buildTarget) { return; }
         const client = getClientForSelectedTarget(selected);
         if (!client) { return; }
-        await client.debug(selected.buildTarget).catch(reportOperationError);
+        await client.debugWithoutBuilding(selected.buildTarget).catch(reportOperationError);
     });
 
     const debugCommand = vscode.commands.registerCommand('bsp.debug', async (item) => {
-        const selectedItem = await getOrSelectBuildTarget(item, target => target.capabilities.canCompile && target.capabilities.canDebug);
+        const selectedItem = await getOrSelectBuildTarget(item, target => target.capabilities.canDebug);
         if (!selectedItem) return;
 
         logInfo(`BSP debug command triggered for target: ${selectedItem?.buildTarget?.id?.uri || selectedItem?.id || 'unknown'}`);
         
         try {
-            if (selectedItem?.buildTarget?.capabilities.canCompile && selectedItem.buildTarget.capabilities.canDebug) {
+            if (selectedItem?.buildTarget?.capabilities.canDebug) {
                 const client = getClientForSelectedTarget(selectedItem);
                 if (!client) { return; }
                 if (await compileBeforeTargetAction(client, selectedItem.buildTarget, 'debug')) {

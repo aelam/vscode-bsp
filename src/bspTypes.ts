@@ -5,6 +5,8 @@ export interface BuildTargetIdentifier {
     uri: string;
 }
 
+export interface ExecutionContextReference { id: string }
+
 export interface BuildTarget {
     id: BuildTargetIdentifier;
     displayName?: string;
@@ -36,6 +38,7 @@ export interface WorkspaceBuildTargetsResult {
 }
 
 export interface CompileParams {
+    executionContext?: ExecutionContextReference;
     targets: BuildTargetIdentifier[];
     originId?: string;
     arguments?: string[];
@@ -63,6 +66,7 @@ export interface SourcesItem {
 }
 
 export interface TestParams {
+    executionContext?: ExecutionContextReference;
     dataKind?: string;
     data?: unknown;
     targets: BuildTargetIdentifier[];
@@ -80,6 +84,7 @@ export interface TestResult {
 }
 
 export interface RunParams {
+    executionContext?: ExecutionContextReference;
     target: BuildTargetIdentifier;
     originId?: string;
     arguments?: string[];
@@ -93,6 +98,7 @@ export interface RunResult {
 }
 
 export interface DebugSessionParams {
+    executionContext?: ExecutionContextReference;
     targets: BuildTargetIdentifier[];
     originId?: string;
     /// Build arguments (e.g. -configuration / -destination) — same selection

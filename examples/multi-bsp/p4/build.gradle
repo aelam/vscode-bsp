@@ -1,0 +1,16 @@
+buildscript {
+    def versionFile = file('.tools/bsp-version')
+    if (versionFile.exists()) {
+        repositories {
+            maven { url = uri('.tools/m2') }
+            mavenCentral()
+        }
+        dependencies {
+            classpath "com.opencastsoftware.gradle:gradle-bsp-plugin:${versionFile.text.trim()}"
+        }
+    }
+}
+
+if (file('.tools/bsp-version').exists()) {
+    apply plugin: 'com.opencastsoftware.gradle.bsp'
+}
