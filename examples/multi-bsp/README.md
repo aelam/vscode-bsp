@@ -66,8 +66,38 @@ macOS and the certificate is already trusted by the keychain, add
 
 Build the updated extension with `npm run compile`, then reload its development
 window and open the generated `hello-swift-kotlin.code-workspace`. The BSP view
-shows **sourcekit-bsp**, **mill-bsp**, and **sourcekit-swiftpm**. Opening only the
-`multi-bsp` folder loads Xcode and Mill.
+shows **sourcekit-bsp**, **mill-bsp**, and **sourcekit-swiftpm**. With this default
+setup, opening only the `multi-bsp` folder loads Xcode and Mill.
+
+### Centralized connections
+
+With a sourcekit-bsp build that supports explicit project selection, connections
+can share the root `.bsp` directory. For SwiftPM, create
+`.bsp/sourcekit-swiftpm.json`:
+
+```json
+{
+  "name": "sourcekit-swiftpm",
+  "version": "0.2",
+  "bspVersion": "2.2.0",
+  "languages": ["swift"],
+  "argv": ["/path/to/sourcekit-bsp", "--package", "p3"]
+}
+```
+
+An Xcode connection can use
+`["/path/to/sourcekit-bsp", "--workspace", "Hello.xcworkspace"]` as its `argv`,
+or use `--project p1/Hello.xcodeproj`. Open `multi-bsp` in VS Code. Each connection
+receives the same workspace root; its server resolves the selected project path
+relative to that root. Each connection keeps its own Context choices.
+A child `.bsp` directory is not required by the BSP standard for each package.
+
+This layout supports target-level Compile, Run, Test, and Debug when advertised
+by the server. With multiple Swift/C-family configurations in the same `.bsp`,
+SourceKit-LSP 6.4 cannot select the matching connection for individual test
+discovery and source locations; the client reports the ambiguity.
+`setup.py` keeps its existing default of a separate `p3` workspace and connection
+to preserve individual test discovery. The default smoke check uses that layout.
 
 ### Add Gradle BSP
 
