@@ -226,7 +226,7 @@
       },
       {
         "command": "bsp.compile",
-        "title": "Compile Target with the Selected Build Settings",
+        "title": "Compile Target\u2026",
         "shortTitle": "Compile Target",
         "category": "BSP",
         "icon": "$(rocket)"
@@ -397,9 +397,10 @@
       },
       {
         "command": "bsp.configureContext",
-        "title": "Configure Execution Context",
+        "title": "Configure Build Context\u2026",
         "category": "BSP",
-        "icon": "$(settings-gear)"
+        "icon": "$(settings-gear)",
+        "shortTitle": "Configure Build Context"
       },
       {
         "command": "bsp.selectContextDimension",
@@ -415,7 +416,7 @@
       },
       {
         "command": "bsp.refreshContexts",
-        "title": "Refresh Execution Contexts",
+        "title": "Refresh Build Contexts",
         "category": "BSP",
         "icon": "$(refresh)"
       },
@@ -621,6 +622,80 @@
           "command": "bsp.contextDebugWithoutBuilding",
           "when": "view == bspTargets && viewItem =~ /buildContextScope.*canDebug/ && viewItem =~ /canReuseBuild/",
           "group": "advanced@3"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "bsp.connectServer",
+          "when": "false"
+        },
+        {
+          "command": "bsp.disconnectServer",
+          "when": "false"
+        },
+        {
+          "command": "bsp.compileDisabled",
+          "when": "false"
+        },
+        {
+          "command": "bsp.testDisabled",
+          "when": "false"
+        },
+        {
+          "command": "bsp.runDisabled",
+          "when": "false"
+        },
+        {
+          "command": "bsp.debugDisabled",
+          "when": "false"
+        },
+        {
+          "command": "bsp.addToFavorites",
+          "when": "false"
+        },
+        {
+          "command": "bsp.removeFromFavorites",
+          "when": "false"
+        },
+        {
+          "command": "bsp.reconnectFavorite",
+          "when": "false"
+        },
+        {
+          "command": "bsp.selectContextDimension",
+          "when": "false"
+        },
+        {
+          "command": "bsp.executeContext",
+          "when": "false"
+        },
+        {
+          "command": "bsp.contextCompile",
+          "when": "false"
+        },
+        {
+          "command": "bsp.contextRun",
+          "when": "false"
+        },
+        {
+          "command": "bsp.contextTest",
+          "when": "false"
+        },
+        {
+          "command": "bsp.contextDebug",
+          "when": "false"
+        },
+        {
+          "command": "bsp.contextRunWithoutBuilding",
+          "when": "false"
+        },
+        {
+          "command": "bsp.contextTestWithoutBuilding",
+          "when": "false"
+        },
+        {
+          "command": "bsp.contextDebugWithoutBuilding",
+          "when": "false"
         }
       ]
     }
