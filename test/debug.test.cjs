@@ -122,17 +122,14 @@ test('workspace LLDB commands reach target actions and F5 with launch overrides'
 });
 
 test('F5 prepares one BSP request and does not start a nested VS Code session', async () => {
-    const client = new BspClient(folder.uri, '/hello/.bsp/config.json', undefined, {
-        getDebugInfo: () => ({}), canHandle: () => true,
-        getRunArguments: async () => ['-configuration', 'Debug', '-destination', 'id=PHONE']
-    });
+    const client = new BspClient(folder.uri, '/hello/.bsp/config.json');
     const target = { id: { uri: 'target://hello' }, displayName: 'Hello' };
     const token = CancellationToken.None;
     let requests = 0;
     client.connection = { sendRequest: async (method, params, receivedToken) => {
         assert.equal(method, 'debugSession/start');
         assert.deepEqual(params.targets, [target.id]);
-        assert.deepEqual(params.arguments, ['-configuration', 'Debug', '-destination', 'id=PHONE']);
+        assert.deepEqual(params.arguments, []);
         assert.equal(receivedToken.isCancellationRequested, false);
         assert.equal(typeof receivedToken.onCancellationRequested, 'function');
         requests++;
@@ -186,10 +183,7 @@ for (const entry of ['toolbar', 'F5', 'prepare without token']) {
             void writer.write({ jsonrpc: '2.0', id: message.id, result: address });
         });
         connection.listen();
-        const client = new BspClient(folder.uri, '/hello/.bsp/config.json', undefined, {
-            getDebugInfo: () => ({}), canHandle: () => true,
-            getRunArguments: async () => ['-configuration', 'Debug', '-destination', 'id=PHONE']
-        });
+        const client = new BspClient(folder.uri, '/hello/.bsp/config.json');
         client.connection = connection;
         const target = { id: { uri: 'target://hello' }, displayName: 'Hello' };
         const cancellation = new CancellationTokenSource();
@@ -213,7 +207,7 @@ for (const entry of ['toolbar', 'F5', 'prepare without token']) {
             assert.equal(typeof message.params.originId, 'string');
             assert.deepEqual(message.params, {
                 targets: [target.id], originId: message.params.originId,
-                arguments: ['-configuration', 'Debug', '-destination', 'id=PHONE']
+                arguments: []
             });
         } finally {
             cancellation.dispose();
@@ -249,17 +243,13 @@ test('default configuration and schema are registered under contributes without 
     assert.equal(JSON.stringify(contribution).includes('AskForProgramName'), false);
 });
 
-test('test targets use the debug icon with test arguments and do not stop at entry', async () => {
-    const client = new BspClient(folder.uri, undefined, undefined, {
-        getDebugInfo: () => ({}), canHandle: () => true,
-        getRunArguments: () => assert.fail('Test debugging must use test settings'),
-        getTestArguments: async () => ['-configuration', 'Debug', '-destination', 'id=SIM']
-    });
+test('test targets use the debug icon and do not stop at entry', async () => {
+    const client = new BspClient(folder.uri);
     const target = { id: { uri: 'target://tests' }, displayName: 'Tests', capabilities: { canTest: true, canDebug: true, canRun: false } };
     client.connection = { sendRequest: async (method, params) => {
         assert.equal(method, 'debugSession/start');
         assert.deepEqual(params.targets, [target.id]);
-        assert.deepEqual(params.arguments, ['-configuration', 'Debug', '-destination', 'id=SIM']);
+        assert.deepEqual(params.arguments, []);
         return { uri: 'tcp://127.0.0.1:25001', data: { request: 'attach', pid: 1234 } };
     } };
     try {
@@ -282,14 +272,14 @@ test('test targets use the debug icon with test arguments and do not stop at ent
         assert.match(icon.group, /inline/);
         assert.match(icon.when, /canDebug/);
         assert.match(icon.when, /busy/);
-        assert.match(icon.when, /canCompile/);
+        assert.doesNotMatch(icon.when, /canCompile/);
         const withoutBuilding = menus.find(m => m.command === 'bsp.debugWithoutBuilding');
         assert.equal(manifest.contributes.commands.find(c => c.command === 'bsp.debugWithoutBuilding').title, 'Debug Without Building');
         assert.match(withoutBuilding.group, /advanced/);
         assert.match(withoutBuilding.when, /canDebug/);
         assert.match(withoutBuilding.when, /busy/);
         assert.doesNotMatch(withoutBuilding.when, /canCompile/);
-        client.buildSystemManager.getTestArguments = async () => { throw new Error('Invalid test destination'); };
+        client.connection.sendRequest = async () => { throw new Error('Invalid test destination'); };
         await assert.rejects(client.debug(target), /Invalid test destination/);
     } finally { client.debugSessions.dispose(); starts.length = 0; }
 });

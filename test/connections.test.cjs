@@ -25,7 +25,9 @@ const vscode = {
     }
 };
 class BspClient {
-    constructor(workspaceUri, configPath) { this.workspaceUri = workspaceUri; this.configPath = configPath; }
+    constructor(workspaceUri, configPath, onTargetsUpdated, preferences) {
+        Object.assign(this, { workspaceUri, configPath, onTargetsUpdated, preferences });
+    }
     operations = { onDidChange: () => ({ dispose() {} }) };
     backgroundTasks = { onDidChange: () => ({ dispose() {} }) };
     async connect() { this.connectCount = (this.connectCount ?? 0) + 1; }
@@ -45,11 +47,14 @@ test('finds BSP configurations in all roots even when the first root has none', 
     directories.clear();
     directories.set('/swift/.bsp', ['sourcekit.json']);
     directories.set('/kotlin/.bsp', ['mill.json', 'README.md']);
-    const manager = new BspConnectionManager();
+    const preferences = { get: () => undefined, update: async () => {} };
+    const manager = new BspConnectionManager(preferences);
     const configs = await manager.discoverWorkspaceConfigurations([uri('/docs'), uri('/swift'), uri('/kotlin')]);
     assert.deepEqual(configs.map(config => config.configPath), ['/swift/.bsp/sourcekit.json', '/kotlin/.bsp/mill.json']);
     for (const config of configs) { await manager.addConnection(config); }
     const [swift, kotlin] = manager.getAllConnections();
+    assert.equal(swift.client.preferences, preferences);
+    assert.equal(kotlin.client.preferences, preferences);
     assert.equal(swift.client.workspaceUri.fsPath, '/swift');
     assert.equal(kotlin.client.workspaceUri.fsPath, '/kotlin');
     assert.equal(kotlin.client.configPath, '/kotlin/.bsp/mill.json');

@@ -46,7 +46,7 @@ def configure_sourcekit(parser, args, directory):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Set up a Swift Hello and Kotlin BSP workspace.")
+    parser = argparse.ArgumentParser(description="Set up Xcode, SwiftPM, and Kotlin BSP connections.")
     parser.add_argument("--sourcekit-bsp", type=Path, help="SourceKit BSP executable for the bundled Xcode project")
     parser.add_argument("--developer-dir", type=Path, help="Xcode Contents/Developer directory; defaults to xcode-select")
     parser.add_argument("--java-home", type=Path, help="JDK directory; defaults to JAVA_HOME or java on PATH")
@@ -54,6 +54,17 @@ def main():
     args = parser.parse_args()
     directory = Path(__file__).resolve().parent
     configure_sourcekit(parser, args, directory)
+    swiftpm = directory / "p3"
+    swiftpm_config = json.loads((directory / ".bsp/sourcekit-bsp.json").read_text())
+    swiftpm_config["name"] = "sourcekit-swiftpm"
+    swiftpm_config["kind"] = "swiftpm"
+    swiftpm_config["languages"] = ["swift"]
+    (swiftpm / ".bsp").mkdir(parents=True, exist_ok=True)
+    (swiftpm / ".bsp/sourcekit-bsp.json").write_text(json.dumps(swiftpm_config, indent=2) + "\n")
+    (swiftpm / ".vscode").mkdir(parents=True, exist_ok=True)
+    settings = directory / ".vscode/settings.json"
+    if settings.is_file():
+        shutil.copyfile(settings, swiftpm / ".vscode/settings.json")
     if args.macos_keychain and sys.platform != "darwin":
         parser.error("--macos-keychain requires macOS")
 
@@ -84,10 +95,15 @@ def main():
     config_path.write_text(json.dumps(config, indent=2) + "\n")
     generated_config.unlink()
     workspace = directory / "hello-swift-kotlin.code-workspace"
-    workspace.write_text(json.dumps({"folders": [
-        {"name": "Hello (Swift + Kotlin)", "path": "."},
-    ]}, indent=2) + "\n")
-    print(f"Open folder in VS Code: {directory}")
+    folders = [
+        {"name": "Xcode + Mill", "path": "."},
+        {"name": "SwiftPM", "path": "p3"},
+    ]
+    if (directory / "p4/.bsp/gradle-bsp.json").is_file():
+        folders.append({"name": "Gradle Java", "path": "p4"})
+    workspace.write_text(json.dumps({"folders": folders}, indent=2) + "\n")
+    print(f"Open all configured connections in VS Code: {workspace}")
+    print(f"Open only Xcode and Mill: {directory}")
 
 
 if __name__ == "__main__":

@@ -69,11 +69,23 @@ export class BspTargetOperations {
         finally {
             operation.cancellation.dispose();
             if (this.exclusive === operation) { this.exclusive = undefined; }
-            if (this.active.get(targetId) === operation) {
-                this.active.delete(targetId);
-                this.changed(targetId);
+            for (const [id, current] of this.active) {
+                if (current === operation) {
+                    this.active.delete(id);
+                    this.changed(id);
+                }
             }
         }
+    }
+
+    includeTargets(owner: string, targets: string[]): void {
+        const operation = this.active.get(owner);
+        if (!operation) { throw new Error('The target operation is no longer active'); }
+        for (const target of targets) {
+            const current = this.get(target);
+            if (current && current !== operation) { throw new TargetBusyError(current.message, current.cancellable); }
+        }
+        for (const target of targets) { this.active.set(target, operation); this.changed(target); }
     }
 
     cancel(targetId: string): void { this.active.get(targetId)?.cancel(); }

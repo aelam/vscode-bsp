@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import { randomUUID } from 'crypto';
 import { BspClient } from './bspClient';
+import type { ContextPreferenceStorage } from './buildContext';
 import { logError, logInfo } from './logger';
 
 export interface BspConnectionConfig {
@@ -33,7 +34,7 @@ export class BspConnectionManager {
     private _onDidUpdateTargets = new vscode.EventEmitter<string>(); // connectionId
     readonly onDidUpdateTargets = this._onDidUpdateTargets.event;
 
-    constructor(private xcodeManager?: any) {}
+    constructor(private preferences?: ContextPreferenceStorage) {}
 
     async discoverBspConfigurations(workspaceUri: vscode.Uri): Promise<BspConnectionConfig[]> {
         const configs: BspConnectionConfig[] = [];
@@ -89,7 +90,7 @@ export class BspConnectionManager {
         const client = new BspClient(config.workspaceUri, config.configPath, () => {
             // Notify when targets are updated for this connection
             this._onDidUpdateTargets.fire(connectionId);
-        }, this.xcodeManager);
+        }, this.preferences);
         
         const connection: BspConnection = {
             id: connectionId,

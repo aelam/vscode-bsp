@@ -1,4 +1,5 @@
 import { BspStatusBar } from './bspStatusBar';
+import { BuildContextProvider } from './buildContextProvider';
 import { BspTesting } from './bspTesting';
 import { sourcekitTestDiscovery } from './sourcekitTestDiscovery';
 import * as vscode from 'vscode';
@@ -9,7 +10,6 @@ import { BuildTargetProvider } from './buildTargetProvider';
 import { BspConnectionManager } from './bspConnectionManager';
 import { MultiBspProvider } from './multiBspProvider';
 import { BspDebugConfigurationProvider, BspDebugAdapterDescriptorFactory } from './debugProvider';
-import { BuildSystemManager } from './buildSystemManager';
 import { revealBuildOutput } from './outputPaths';
 import { cleanBuildCache } from './cleanCache';
 import { initializeBuildLogger, initializeLogger, showBuildOutput, log, logError, logInfo } from './logger';
@@ -41,6 +41,7 @@ function getClientForSelectedTarget(selectedItem: any): BspClient | undefined {
 }
 
 async function compileBeforeTargetAction(client: BspClient, target: BuildTarget, actionName: string): Promise<boolean> {
+    if (client.contexts.enabled || !target.capabilities.canCompile) { return true; }
     try {
         const result = await client.compile(target);
         if (result.statusCode !== StatusCode.Ok) {
@@ -440,32 +441,39 @@ async function initializeBspExtension(context: vscode.ExtensionContext) {
     updateConnectionContext();
     logInfo('BSP context enabled');
 
-    // Initialize build system manager and connection manager
-    const buildSystemManager = new BuildSystemManager(context);
-    
-    // Create connection manager with build system manager
-    const tempConnectionManager = new BspConnectionManager();
-    multiBspProvider = new MultiBspProvider(tempConnectionManager, context, buildSystemManager);
-    
-    // Now create the real connection manager with the shared build system manager
-    connectionManager = new BspConnectionManager(buildSystemManager);
+    connectionManager = new BspConnectionManager(context.workspaceState);
     context.subscriptions.push(connectionManager.onDidChangeConnections(() => updateConnectionContext()));
-    
-    // Replace the multiBspProvider with the correct connection manager, reusing the build system manager
-    multiBspProvider = new MultiBspProvider(connectionManager, context, buildSystemManager);
+    bspClient = new BspClient(workspaceFolders[0].uri, undefined, undefined, context.workspaceState);
+    const contexts = new BuildContextProvider(connectionManager, bspClient);
+    multiBspProvider = new MultiBspProvider(connectionManager, context, contexts);
+    context.subscriptions.push(contexts, multiBspProvider);
 
     // Register multi-BSP tree data provider
     const multiBspTreeView = vscode.window.createTreeView('bspTargets', {
-        treeDataProvider: multiBspProvider
+        treeDataProvider: multiBspProvider,
+        showCollapseAll: true
     });
     context.subscriptions.push(multiBspTreeView);
     logInfo('Multi-BSP tree view registered');
 
-    // Initialize single BSP client for backward compatibility
-    logInfo(`🔧 Getting BuildSystemManager for BspClient: ${buildSystemManager ? 'available' : 'unavailable'}`);
-    logInfo(`🔧 BuildSystemManager type: ${typeof buildSystemManager}`);
-    logInfo(`🔧 BuildSystemManager instance: ${buildSystemManager?.constructor?.name}`);
-    bspClient = new BspClient(workspaceFolders[0].uri, undefined, undefined, buildSystemManager);
+    for (const [command, action] of [
+        ['bsp.configureContext', (item: any) => contexts.configure(item)],
+        ['bsp.selectContextDimension', (item: any) => contexts.selectDimension(item)],
+        ['bsp.executeContext', (item: any) => item ? contexts.execute(item) : contexts.configure()],
+        ['bsp.contextCompile', (item: any) => contexts.execute(item, 'compile')],
+        ['bsp.contextRun', (item: any) => contexts.execute(item, 'run')],
+        ['bsp.contextTest', (item: any) => contexts.execute(item, 'test')],
+        ['bsp.contextDebug', (item: any) => contexts.execute(item, 'debug')],
+        ['bsp.contextRunWithoutBuilding', (item: any) => contexts.execute(item, 'run', 'reuse')],
+        ['bsp.contextTestWithoutBuilding', (item: any) => contexts.execute(item, 'test', 'reuse')],
+        ['bsp.contextDebugWithoutBuilding', (item: any) => contexts.execute(item, 'debug', 'reuse')]
+    ] as const) {
+        context.subscriptions.push(vscode.commands.registerCommand(command, async item => {
+            try { await action(item); }
+            catch (error) { void vscode.window.showErrorMessage(`Build context: ${String(error)}`); }
+        }));
+    }
+    context.subscriptions.push(vscode.commands.registerCommand('bsp.refreshContexts', () => contexts.refresh()));
     buildTargetProvider = new BuildTargetProvider(bspClient);
     context.subscriptions.push(new BspStatusBar(connectionManager, bspClient));
     context.subscriptions.push(new BspTesting(connectionManager, bspClient, [sourcekitTestDiscovery]));
@@ -494,7 +502,7 @@ async function initializeBspExtension(context: vscode.ExtensionContext) {
     const refreshCommand = vscode.commands.registerCommand('bsp.refresh', () => {
         logInfo('BSP refresh command triggered');
         buildTargetProvider?.refresh();
-        multiBspProvider?.refresh();
+        contexts.refresh();
     });
 
     const reloadCommand = vscode.commands.registerCommand('bsp.reload', async (item) => {
@@ -704,12 +712,12 @@ async function initializeBspExtension(context: vscode.ExtensionContext) {
     });
 
     const testCommand = vscode.commands.registerCommand('bsp.test', async (item) => {
-        const selectedItem = await getOrSelectBuildTarget(item, target => target.capabilities.canCompile && target.capabilities.canTest);
+        const selectedItem = await getOrSelectBuildTarget(item, target => target.capabilities.canTest);
         if (!selectedItem) return;
 
         logInfo(`BSP test command triggered for target: ${selectedItem?.buildTarget?.id?.uri || selectedItem?.id || 'unknown'}`);
 
-        if (selectedItem?.buildTarget?.capabilities.canCompile && selectedItem.buildTarget.capabilities.canTest) {
+        if (selectedItem?.buildTarget?.capabilities.canTest) {
             const client = getClientForSelectedTarget(selectedItem);
             if (!client) { return; }
             if (await compileBeforeTargetAction(client, selectedItem.buildTarget, 'test')) {
@@ -721,12 +729,12 @@ async function initializeBspExtension(context: vscode.ExtensionContext) {
     });
 
     const runCommand = vscode.commands.registerCommand('bsp.run', async (item) => {
-        const selectedItem = await getOrSelectBuildTarget(item, target => target.capabilities.canCompile && target.capabilities.canRun);
+        const selectedItem = await getOrSelectBuildTarget(item, target => target.capabilities.canRun);
         if (!selectedItem) return;
 
         logInfo(`BSP run command triggered for target: ${selectedItem?.buildTarget?.id?.uri || selectedItem?.id || 'unknown'}`);
 
-        if (selectedItem?.buildTarget?.capabilities.canCompile && selectedItem.buildTarget.capabilities.canRun) {
+        if (selectedItem?.buildTarget?.capabilities.canRun) {
             const client = getClientForSelectedTarget(selectedItem);
             if (!client) { return; }
             if (await compileBeforeTargetAction(client, selectedItem.buildTarget, 'run')) {
@@ -766,17 +774,17 @@ async function initializeBspExtension(context: vscode.ExtensionContext) {
         if (!selected?.buildTarget) { return; }
         const client = getClientForSelectedTarget(selected);
         if (!client) { return; }
-        await client.debug(selected.buildTarget).catch(reportOperationError);
+        await client.debugWithoutBuilding(selected.buildTarget).catch(reportOperationError);
     });
 
     const debugCommand = vscode.commands.registerCommand('bsp.debug', async (item) => {
-        const selectedItem = await getOrSelectBuildTarget(item, target => target.capabilities.canCompile && target.capabilities.canDebug);
+        const selectedItem = await getOrSelectBuildTarget(item, target => target.capabilities.canDebug);
         if (!selectedItem) return;
 
         logInfo(`BSP debug command triggered for target: ${selectedItem?.buildTarget?.id?.uri || selectedItem?.id || 'unknown'}`);
         
         try {
-            if (selectedItem?.buildTarget?.capabilities.canCompile && selectedItem.buildTarget.capabilities.canDebug) {
+            if (selectedItem?.buildTarget?.capabilities.canDebug) {
                 const client = getClientForSelectedTarget(selectedItem);
                 if (!client) { return; }
                 if (await compileBeforeTargetAction(client, selectedItem.buildTarget, 'debug')) {
@@ -832,23 +840,6 @@ async function initializeBspExtension(context: vscode.ExtensionContext) {
         // This command is disabled and should not be executable
     });
 
-    // Build system commands
-    const handleDynamicSelectorCommand = vscode.commands.registerCommand('bsp.handleDynamicSelector', async (treeItem) => {
-        if (!treeItem || !treeItem.buildTarget || !treeItem.selectorConfig || !multiBspProvider) {
-            logError('Invalid tree item for dynamic selector');
-            return;
-        }
-        
-        logInfo(`handleDynamicSelector command triggered for ${treeItem.selectorConfig.keyName}`);
-        
-        const client = treeItem.connectionId
-            ? connectionManager?.getConnection(treeItem.connectionId)?.client : bspClient;
-        const isBusy = () => !!client?.operations.get(treeItem.buildTarget.id.uri);
-        if (isBusy()) { return; }
-        const buildSystemMgr = multiBspProvider.getBuildSystemManager();
-        await buildSystemMgr.showDynamicSelector(treeItem.buildTarget, treeItem.selectorConfig, () => !isBusy());
-    });
-
     // Favorites management commands
     const addToFavoritesCommand = vscode.commands.registerCommand('bsp.addToFavorites', async (item) => {
         if (!multiBspProvider || !item?.buildTarget) return;
@@ -860,7 +851,7 @@ async function initializeBspExtension(context: vscode.ExtensionContext) {
     const removeFromFavoritesCommand = vscode.commands.registerCommand('bsp.removeFromFavorites', async (item) => {
         if (!multiBspProvider || !item?.buildTarget) return;
         
-        await multiBspProvider.removeFromFavorites(item.buildTarget.id.uri);
+        await multiBspProvider.removeFromFavorites(item.buildTarget.id.uri, item.connectionId);
         vscode.window.showInformationMessage(`Removed "${item.buildTarget.displayName || item.buildTarget.id.uri}" from favorites`);
     });
 
@@ -910,7 +901,6 @@ async function initializeBspExtension(context: vscode.ExtensionContext) {
         testDisabledCommand,
         runDisabledCommand,
         debugDisabledCommand,
-        handleDynamicSelectorCommand,
         addToFavoritesCommand,
         removeFromFavoritesCommand,
         reconnectFavoriteCommand

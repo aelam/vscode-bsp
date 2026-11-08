@@ -131,15 +131,17 @@ for project selection and connection details.
    Discovery reads `.bsp/*.json` at each workspace folder's root.
 2. The extension discovers and connects to servers on activation.
    If needed, run **BSP: Connect BSP Servers** from the Command Palette.
-3. Run **BSP: Show Build Targets** to open **BSP Targets** in Explorer.
-   Expand a target and select its build settings, such as sourcekit-bsp's **Configuration** and **Destination**.
+3. Run **BSP: Show Build Targets** to open **BSP** in Explorer.
+   Expand a server to browse **Targets** and **Dependencies**.
+   Servers with the configuration extension also show **Build Context** first.
+   Servers without this extension use their default execution settings.
    Use the target's compile, test, run, or debug action, as supported.
    See [Commands](#commands) for the Command Palette entries.
 
-For one folder with both [sourcekit-bsp](https://github.com/aelam/sourcekit-bsp)
-and [Mill BSP](https://github.com/com-lihaoyi/mill), see the
-[multi-BSP example](examples/multi-bsp/README.md). It includes an Xcode application,
-a Kotlin application, and tests for both.
+For a workspace with [sourcekit-bsp](https://github.com/aelam/sourcekit-bsp),
+[Mill BSP](https://github.com/com-lihaoyi/mill), and Gradle BSP, see the
+[multi-BSP example](examples/multi-bsp/README.md). It includes Xcode, SwiftPM,
+Kotlin, and an optional Java/Gradle project with tests.
 
 ### Clean build cache
 
@@ -198,12 +200,14 @@ Run `npm run test:protocol` to check progress, cancellation, diagnostics, and ou
 The native VS Code **Testing** panel lists test targets from connected BSP servers.
 Use **Run Tests** to run a target, or run all targets from the panel toolbar.
 The **BSP: Build and Test Target** command also publishes results to this panel.
-Configuration and destination selections come from the BSP Targets view.
+Execution settings inherit the workspace Build Context choices. Without the context
+extension, the server uses its default execution settings.
 The Stop button cancels the corresponding BSP request.
 
 Targets that advertise both `canTest` and `canDebug` also offer **Debug Test
-Target**. Select one whole target. The client saves changes, builds first when
-the target supports compilation, and starts the normal VS Code debugger.
+Target**. Select one whole target. The client saves changes and starts the normal
+VS Code debugger. With contexts, the server prepares the selected configuration;
+otherwise, the client builds first when the target supports compilation.
 Use the debug toolbar to stop the session. Individual cases and case exclusions
 are not supported for debugging. Debug sessions do not publish per-case results
 to Testing; use **Run Tests** for those results.
@@ -220,9 +224,25 @@ existing nodes; failures include messages and links to their source.
 The adapter uses SourceKit-LSP from the server's advertised toolchain. It runs a
 separate discovery session with background indexing disabled, without access to
 private Swift extension APIs. It requires SourceKit-LSP test discovery version 2
-and one Swift/C-family `.bsp/*.json` configuration per workspace folder. Source
-edits refresh locations automatically; the Testing panel's Refresh action retries
-discovery.
+and exactly one valid Swift/C-family BSP configuration in the workspace's `.bsp`
+directory, matching the selected connection. Source edits refresh locations
+automatically; the Testing panel's Refresh action retries discovery.
+The adapter opens one Swift source file at a time, requests its tests, then
+closes it. This limits pending document work in large projects. Requests time
+out after 30 seconds; failures include the affected file and recent SourceKit-LSP
+error output when available.
+After a timeout, the adapter stops its discovery session. The next refresh
+starts a new session.
+
+Multiple Swift/C-family connections can share one workspace root for target-level
+Compile, Run, Test, and Debug when the servers advertise those actions.
+SourceKit-LSP 6.4 cannot select a BSP configuration by path or name. With multiple
+matching configurations, the adapter reports ambiguous test discovery and does
+not populate individual cases or source locations from another connection.
+SourceKit-LSP attempts to decode every entry in `.bsp`, including files named
+`*.json.disabled`. Move inactive configurations outside `.bsp`; changing the
+suffix does not disable them for SourceKit-LSP. Invalid JSON and entries that
+lack the required BSP fields are ignored.
 SwiftPM uses the toolchain reported by the selected Swift executable, including
 executables managed through shims. If that toolchain has no SourceKit-LSP,
 target-level testing remains available, but case discovery is unavailable.
@@ -241,9 +261,9 @@ for the optional metadata and payloads.
 
 ### Debug a test target
 
-In **BSP Targets**, click the **Build and Debug Target** icon beside a test target.
+In **BSP**, click the **Build and Debug Target** icon beside a test target.
 The command is also available as **BSP: Debug Tests** in the Command Palette.
-It uses the target's selected test configuration and destination. The server must
+It uses the Build Context selection when supported, or the server defaults. The server must
 advertise both `canTest` and `canDebug`. The client requests `debugSession/start`
 and connects to the returned DAP endpoint.
 
@@ -277,10 +297,14 @@ The extension automatically activates when a workspace root contains a `.bsp`
 directory, even if Git or search settings exclude it. Project sources can live in
 subfolders. Activation does not depend on a language extension.
 
-### BSP Targets View
+### BSP View
 
-- The "BSP Targets" view appears in the Explorer panel
-- Displays all discoverable build targets with their capabilities
+- The "BSP" view appears in the Explorer panel
+- Groups each server's entries into **Build Context**, **Favorites**, **Targets**, and **Dependencies**.
+- **Favorites** appears when the server has saved targets. Favorites are stored separately for each workspace and BSP configuration.
+- **Build Context** appears only when the server supports the configuration extension. Its fields load when expanded.
+- **Targets** contains targets without the standard `dependency` tag. **Dependencies** contains targets with that tag and is collapsed by default.
+- Both groups retain every target, including test targets from dependency packages. Grouping preserves server order, and action availability follows capabilities.
 - Shows target metadata including:
   - Dependencies
   - Supported languages
@@ -291,7 +315,7 @@ subfolders. Activation does not depend on a language extension.
 - **BSP: Connect BSP Servers** - Connect to servers; discover configurations first if none are known
 - **BSP: Discover BSP Connections** - Discover configurations added after activation
 - **BSP: Refresh Build Targets** - Refresh the build targets view
-- **BSP: Show Build Targets** - Focus on the BSP Targets view
+- **BSP: Show Build Targets** - Focus on the BSP view
 - **BSP: Compile Target with the Selected Build Settings** - Compile the selected build target
 - **BSP: Build and Test Target** - Build and run tests for the selected target
 - **BSP: Build and Run Target** - Build and run the selected target
@@ -378,8 +402,153 @@ npm run test:protocol
 The CI workflow compiles TypeScript and runs the protocol tests on Linux and
 macOS with Node.js 24 for pull requests and pushes to `master`. These tests use
 VS Code API substitutes and do not require a running editor or build server.
-For checks with SourceKit BSP and Mill, see the
+For checks with SourceKit BSP, Mill, and Gradle BSP, see the
 [multi-BSP example](examples/multi-bsp/README.md#automated-check).
+
+## Optional execution configuration extension
+
+The client can negotiate `vscode-bsp.build-context` version `0.1`. This experimental
+extension is separate from the BSP standard. It lets a server supply execution
+settings without making the client interpret Xcode or SwiftPM command arguments.
+
+| Server support | Client behavior |
+| --- | --- |
+| Standard BSP only | Keep target browsing and the supported standard actions. |
+| Build context extension `0.1` | Use server-provided dimensions, validate selections, and send resolved contexts. |
+
+The former private `target.data.selectors` format and its saved choices are no
+longer used. Servers that need configurable execution settings should implement
+the context extension. Test case selectors are unchanged.
+
+### Protocol contract
+
+During `build/initialize`, the client includes this entry in `data.bspExtensions`:
+
+```json
+{
+  "vscode-bsp.build-context": { "version": "0.1" }
+}
+```
+
+The server must acknowledge the same version in `result.data.bspExtensions`, with
+`required: true` and an `operations` array. The optional `buildPolicies` array
+must contain `"build"` and can include supported alternatives such as `"reuse"`. If absent, only
+`"build"` is supported. No acknowledgement means the client
+sends standard BSP requests without generated build arguments. Server names do not enable this
+extension.
+
+The client then uses these custom methods:
+
+- `workspace/contextOptions` starts with `scope` and `selection`, without an
+  operation. It returns configuration dimensions, selections, and optional available operations.
+- `workspace/resolveContext` adds the chosen `operation` and optional `buildPolicy`.
+  It returns `id`, `operation`, `targets`, the effective `selection`, and `buildPolicy`.
+  The policy defaults to `"build"`. `"reuse"` applies only to Run, Test, and Debug.
+  The server freezes the policy in the resolved context; it is not a selection preference.
+
+The optional scope contains `workspaceUri` and `targets`. Omitted targets allow a
+workspace entry such as a scheme; explicit targets limit the requested operation.
+The operation is `compile`, `run`, `test`, or `debug`. Selection keys and option
+IDs are opaque strings. A dimension provides `id`, `label`, `kind: "enum"`,
+`required`, `options`, and optional `value`, `enabled`, and `reason`. Disabled
+dimensions remain visible with their reason and cannot be edited. Options provide `id`, `label`, and
+optional descriptions and availability. The UI displays labels, not IDs such as
+`xcode.scheme`. Unsupported required dimension kinds must block execution.
+Dimensions are ordered from earlier choices to dependent choices. After a change,
+the client validates existing dependent choices in that order. Compatible values
+remain selected; unavailable, disabled, or removed choices are cleared. Selecting
+the same value does not reset later choices. Discovery defaults are displayed
+but are not saved as user preferences.
+
+An option can attach structured destination metadata with
+`dataKind: "execution-destination"` and a `data` object. It contains `kind`,
+`platform: {id, label}`, and optional `osVersion`, `architecture`, and `state`.
+The picker and tree tooltip show these details without interpreting the option
+ID. Unknown kinds or absent metadata use the original label and description.
+Metadata does not grant Run, Test, or Debug capability.
+
+The standard `buildTarget/compile`, `buildTarget/run`, `buildTarget/test`, and
+`debugSession/start` requests carry an additional field:
+
+```json
+{
+  "executionContext": { "id": "context-id-returned-by-resolve" }
+}
+```
+
+After negotiation, the server requires this field and validates its operation,
+target set, and settings. The client does not retry a failed context request using
+default settings. Application arguments and test selection data retain their
+existing meanings. Standard progress, test reports, cancellation, and DAP remain
+in use; there is no additional execute RPC.
+
+Compiler-information APIs such as `buildTarget/scalacOptions` and
+`buildTarget/javacOptions` return current compiler inputs. They do not describe
+selectable configuration fields. This extension does not replace those APIs or
+change the language server's indexing configuration.
+
+### Configuration UI
+
+The **Build Context** section under each server in the **BSP** view shows its workspace configuration.
+Each scope contains the shared configuration dimensions. Select a dimension to choose an option. The client uses the order,
+labels, and options returned by the server. For Xcode workspace operations, the
+server shows Scheme, Configuration, and Destination from the first query. The
+latter two remain disabled until a Scheme is selected. Selecting an operation
+is not a prerequisite for loading the Scheme list. SwiftPM supplies
+its own dimensions without an Xcode scheme.
+
+Edit configuration in **Build Context**. The target menu keeps its compile, run,
+test, and debug actions without a separate configuration entry. Buttons
+use the server's available operations and the target's standard capabilities.
+Clicking a button supplies the operation for resolution. Target operations inherit the workspace choices for dimensions that both scopes
+provide. Workspace-only dimensions do not override the requested target. Invalid
+shared choices are rejected instead of falling back to target defaults. Internal
+target-only choices remain separate for each connection. Shared preferences apply
+to every operation. Saved operation overrides from earlier versions are ignored.
+Only explicit preferences are saved; resolved context IDs remain tied to the current server session.
+
+Pickers with at least five server options show a **Recent** section after a choice is saved.
+It contains up to five valid recent choices, newest first. History is stored separately
+for each connection, workspace or target scope, and configuration field. Smaller lists keep their existing layout.
+The complete option list and destination groups remain below Recent.
+
+Option pickers highlight the current choice. Moving the highlight does not save
+a choice; confirm an item to apply it. Optional fields offer **Automatic**, which
+clears that explicit choice while retaining compatible dependent choices. The
+server resolves omitted values when an operation starts. Required fields do not offer Automatic;
+an empty required field shows **Not selected**.
+
+Destination pickers group devices first, simulators next, and generic
+destinations last. Other destination types keep a separate group. Unavailable
+items appear at the end of their group. Platform, version, type, and architecture
+appear beside the name. A server-provided `data.identifier` with `label` and
+`value`, such as `{"label":"UDID","value":"device-uuid"}`, appears in the detail
+line with state and availability information. Opaque option IDs are not treated
+as device identifiers. The configuration list contains fields and reset only; use the scope's
+buttons or the standard commands to execute an operation.
+
+After a choice, the view uses the server's validation response to update that
+scope. Retaining dependent values can require further validation requests in
+dimension order. It does not query every other connection again. Refreshing the view or
+updating targets reloads the options, and execution still validates current
+options before it resolves a context.
+
+**Without Building** actions appear in Target and Build Context menus when the
+server advertises `"reuse"` in `buildPolicies`. The client resolves with
+`buildPolicy: "reuse"` and requires the response to explicitly confirm `"reuse"`.
+A missing or different response policy blocks execution, with no fallback build.
+Standard execution requests still carry only `executionContext.id`; the policy
+is not added to them. Normal actions omit the policy and accept older responses
+without it as `"build"`.
+
+Legacy servers keep the existing Without Building commands and standard request
+payloads. These commands skip the client's Compile step; the server controls
+whether its standard execution request performs a build.
+
+See the server's [full contract](https://github.com/aelam/sourcekit-bsp#execution-configuration-extension)
+and the [multi-BSP example](examples/multi-bsp/README.md). The example includes
+Xcode and SwiftPM plus real Mill/Kotlin and Gradle/Java servers. Mill and Gradle
+use standard BSP actions without this extension.
 
 ## BSP Protocol Support
 

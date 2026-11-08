@@ -71,7 +71,8 @@ test('SwiftPM discovery opens source files, keeps case locations, and sends exac
     t.after(() => fs.rm(root, { recursive: true, force: true }));
     await fs.mkdir(path.join(root, '.bsp'));
     const configPath = path.join(root, '.bsp/sourcekit-bsp.json');
-    await fs.writeFile(configPath, JSON.stringify({ languages: ['swift'] }));
+    await fs.writeFile(configPath, JSON.stringify({ name: 'SourceKit', version: '0.2', bspVersion: '2.2.0',
+        languages: ['swift'], argv: ['sourcekit-bsp'] }));
     const file = path.join(root, 'DemoTests.swift');
     const uri = pathToFileURL(file).href;
     await fs.writeFile(file, '@Test func namedGreeting() {}');
@@ -116,10 +117,184 @@ test('SwiftPM discovery opens source files, keeps case locations, and sends exac
     const updated = (await adapter.discover([tests], CancellationToken.None)).get(tests.id.uri);
     assert.equal(updated[0].id, 'changed()');
     assert.deepEqual(updated[0].range.start, { line: 8, character: 0 });
-    assert.deepEqual(notifications, ['open', 'change']);
+    await until(() => notifications.filter(kind => kind === 'close').length === 2);
+    assert.deepEqual(notifications, ['open', 'close', 'open', 'close']);
     files = [];
     assert.deepEqual((await adapter.discover([tests], CancellationToken.None)).get(tests.id.uri), []);
     await closed;
     assert.ok(notifications.includes('close'));
     assert.throws(() => adapter.selection(tests, [{ ...updated[0], disabled: true }]), /individual selection/);
+});
+
+async function until(condition) {
+    for (let attempt = 0; attempt < 100 && !condition(); attempt++) {
+        await new Promise(resolve => setImmediate(resolve));
+    }
+    assert.ok(condition(), 'The expected protocol event did not arrive');
+}
+
+async function discoveryFixture(t, count, handle, initialize) {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'bsp-bounded-discovery-'));
+    t.after(() => fs.rm(root, { recursive: true, force: true }));
+    await fs.mkdir(path.join(root, '.bsp'));
+    const configPath = path.join(root, '.bsp/sourcekit-bsp.json');
+    await fs.writeFile(configPath, JSON.stringify({ name: 'SourceKit', version: '0.2', bspVersion: '2.2.0',
+        languages: ['swift'], argv: ['sourcekit-bsp'] }));
+    const files = [];
+    for (let index = 0; index < count; index++) {
+        const file = path.join(root, `Tests${index}.swift`);
+        await fs.writeFile(file, `@Test func test${index}() {}`);
+        files.push({ uri: pathToFileURL(file).href, kind: 1 });
+    }
+    const events = [], sent = [], opened = new Set();
+    let starts = 0, maximum = 0, child;
+    startServer = () => {
+        starts++;
+        child = new EventEmitter();
+        Object.assign(child, { stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(), exitCode: null });
+        let buffered = Buffer.alloc(0);
+        child.stdin.on('data', chunk => {
+            buffered = Buffer.concat([buffered, chunk]);
+            while (true) {
+                const separator = buffered.indexOf('\r\n\r\n');
+                if (separator < 0) { break; }
+                const length = Number(/Content-Length: (\d+)/i.exec(buffered.subarray(0, separator).toString())[1]);
+                if (buffered.length < separator + 4 + length) { break; }
+                const message = JSON.parse(buffered.subarray(separator + 4, separator + 4 + length).toString());
+                if (message.method) { sent.push(message.method); }
+                buffered = buffered.subarray(separator + 4 + length);
+            }
+        });
+        const rpc = createMessageConnection(new StreamMessageReader(child.stdin), new StreamMessageWriter(child.stdout));
+        rpc.onRequest('initialize', () => {
+            initialize?.();
+            return { capabilities: { experimental: { 'textDocument/tests': { version: 2 } } } };
+        });
+        rpc.onNotification('textDocument/didOpen', params => {
+            assert.ok(!opened.has(params.textDocument.uri));
+            opened.add(params.textDocument.uri); maximum = Math.max(maximum, opened.size);
+            events.push(['open', params.textDocument.uri, params.textDocument.version]);
+        });
+        rpc.onNotification('textDocument/didClose', params => {
+            opened.delete(params.textDocument.uri); events.push(['close', params.textDocument.uri]);
+        });
+        rpc.onRequest('textDocument/tests', async params => {
+            assert.ok(opened.has(params.textDocument.uri));
+            events.push(['tests', params.textDocument.uri]);
+            if (handle) { return await handle(params.textDocument.uri, child); }
+            return [testCase('DemoTests.example()', params.textDocument.uri)];
+        });
+        rpc.listen();
+        child.kill = () => { sent.push('process/kill'); opened.clear(); child.exitCode = 0; rpc.dispose(); child.emit('exit', 0); return true; };
+        return child;
+    };
+    const tests = target();
+    const connection = { config: { configPath, name: 'Demo', workspaceUri: { fsPath: root, toString: () => pathToFileURL(root).href } },
+        client: { targets: [tests], getSources: async () => [{ target: tests.id, sources: files }] } };
+    const adapter = sourcekitTestDiscovery(connection);
+    t.after(() => { adapter.dispose(); workspace.textDocuments = []; });
+    return { adapter, tests, files, events, sent, opened, get maximum() { return maximum; }, get starts() { return starts; },
+        flush: () => until(() => opened.size === 0) };
+}
+
+test('large discovery interleaves each open and test request with a close before opening the next file', async t => {
+    const fixture = await discoveryFixture(t, 50);
+    const result = await fixture.adapter.discover([fixture.tests], CancellationToken.None);
+    await fixture.flush();
+    assert.equal(result.get(fixture.tests.id.uri).length, 50);
+    assert.equal(fixture.maximum, 1);
+    assert.equal(fixture.opened.size, 0);
+    assert.deepEqual(fixture.events.map(event => event[0]), Array.from({ length: 50 }, () => ['open', 'tests', 'close']).flat());
+    await fixture.adapter.discover([fixture.tests], CancellationToken.None);
+    await fixture.flush();
+    assert.equal(fixture.starts, 1, 'The existing LSP process must serve the next discovery');
+    assert.equal(fixture.opened.size, 0);
+    assert.ok(fixture.events.slice(150).filter(event => event[0] === 'open').every(event => event[2] === 2));
+});
+
+test('a failed document request closes its document and preserves the session for a later retry', async t => {
+    let fail = true;
+    const fixture = await discoveryFixture(t, 3, uri => {
+        if (fail && uri.endsWith('/Tests1.swift')) { throw new Error('Broken test discovery'); }
+        return [testCase('DemoTests.example()', uri)];
+    });
+    await assert.rejects(fixture.adapter.discover([fixture.tests], CancellationToken.None), /Tests1\.swift.*Broken test discovery/);
+    await fixture.flush();
+    assert.equal(fixture.opened.size, 0);
+    assert.deepEqual(fixture.events.map(event => event[0]), ['open', 'tests', 'close', 'open', 'tests', 'close']);
+    fail = false;
+    const result = await fixture.adapter.discover([fixture.tests], CancellationToken.None);
+    await fixture.flush();
+    assert.equal(result.get(fixture.tests.id.uri).length, 3);
+    assert.equal(fixture.starts, 1);
+    assert.equal(fixture.maximum, 1);
+});
+
+test('cancellation closes the active document and does not open the remaining sources', async t => {
+    const { CancellationTokenSource } = require('vscode-jsonrpc/node');
+    const cancellation = new CancellationTokenSource();
+    t.after(() => cancellation.dispose());
+    const fixture = await discoveryFixture(t, 3, () => { cancellation.cancel(); return []; });
+    await assert.rejects(fixture.adapter.discover([fixture.tests], cancellation.token), /cancelled/);
+    await fixture.flush();
+    assert.deepEqual(fixture.events.map(event => event[0]), ['open', 'tests', 'close']);
+    assert.equal(fixture.opened.size, 0);
+    await fixture.adapter.discover([fixture.tests], CancellationToken.None);
+    await fixture.flush();
+    assert.equal(fixture.starts, 1);
+});
+
+test('document timeouts close and stop the session before the next explicit discovery creates a new one', async t => {
+    const originalTimeout = global.setTimeout;
+    let timeout;
+    global.setTimeout = (callback, delay, ...args) => {
+        if (delay === 30000) { timeout = () => callback(...args); }
+        return originalTimeout(callback, delay, ...args);
+    };
+    t.after(() => { global.setTimeout = originalTimeout; });
+    let fail = true;
+    const fixture = await discoveryFixture(t, 2, async (uri, child) => {
+        if (!fail) { return [testCase('DemoTests.example()', uri)]; }
+        child.stderr.write('discard-this-prefix:' + 'x'.repeat(9000) + '\ncompiler-work-queued');
+        await new Promise(resolve => setImmediate(resolve));
+        timeout();
+        return [];
+    });
+    const error = await fixture.adapter.discover([fixture.tests], CancellationToken.None).then(
+        () => assert.fail('The document request should time out'), error => error);
+    assert.match(error.message, /timed out: textDocument\/tests.*Tests0\.swift/);
+    assert.match(error.message, /compiler-work-queued/);
+    assert.doesNotMatch(error.message, /discard-this-prefix/);
+    assert.ok(error.message.length < 9000);
+    await fixture.flush();
+    assert.deepEqual(fixture.events.filter(event => event[0] !== 'close').map(event => event[0]), ['open', 'tests']);
+    assert.deepEqual(fixture.sent.slice(-2), ['textDocument/didClose', 'process/kill']);
+    assert.equal(fixture.opened.size, 0);
+    assert.equal(fixture.starts, 1, 'A timeout must not retry automatically');
+    fail = false;
+    const result = await fixture.adapter.discover([fixture.tests], CancellationToken.None);
+    await fixture.flush();
+    assert.equal(fixture.starts, 2);
+    assert.equal(result.get(fixture.tests.id.uri).length, 2);
+    assert.equal(fixture.maximum, 1);
+});
+
+test('an initialize timeout stops the incomplete session and a later discovery initializes again', async t => {
+    const originalTimeout = global.setTimeout;
+    let timeout, fail = true;
+    global.setTimeout = (callback, delay, ...args) => {
+        if (delay === 30000) { timeout = () => callback(...args); }
+        return originalTimeout(callback, delay, ...args);
+    };
+    t.after(() => { global.setTimeout = originalTimeout; });
+    const fixture = await discoveryFixture(t, 1, undefined, () => { if (fail) { timeout(); } });
+    await assert.rejects(fixture.adapter.discover([fixture.tests], CancellationToken.None), /timed out: initialize/);
+    assert.equal(fixture.starts, 1);
+    assert.deepEqual(fixture.events, []);
+    assert.equal(fixture.sent.at(-1), 'process/kill');
+    fail = false;
+    const result = await fixture.adapter.discover([fixture.tests], CancellationToken.None);
+    await fixture.flush();
+    assert.equal(fixture.starts, 2);
+    assert.equal(result.get(fixture.tests.id.uri).length, 1);
 });

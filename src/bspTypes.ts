@@ -5,6 +5,8 @@ export interface BuildTargetIdentifier {
     uri: string;
 }
 
+export interface ExecutionContextReference { id: string }
+
 export interface BuildTarget {
     id: BuildTargetIdentifier;
     displayName?: string;
@@ -16,13 +18,6 @@ export interface BuildTarget {
     dataKind?: string;
     data?: any;
 }
-
-// Generic build system data structure that can be used by any build system
-export interface BuildSystemData {
-    selectors: SelectorConfiguration[]; // Direct support for server data structure
-    selectedValues: { [selectorKey: string]: SelectorOption }; // Store selected values by selector key
-}
-
 
 export interface BuildTargetCapabilities {
     canCompile: boolean;
@@ -36,6 +31,7 @@ export interface WorkspaceBuildTargetsResult {
 }
 
 export interface CompileParams {
+    executionContext?: ExecutionContextReference;
     targets: BuildTargetIdentifier[];
     originId?: string;
     arguments?: string[];
@@ -63,6 +59,7 @@ export interface SourcesItem {
 }
 
 export interface TestParams {
+    executionContext?: ExecutionContextReference;
     dataKind?: string;
     data?: unknown;
     targets: BuildTargetIdentifier[];
@@ -80,6 +77,7 @@ export interface TestResult {
 }
 
 export interface RunParams {
+    executionContext?: ExecutionContextReference;
     target: BuildTargetIdentifier;
     originId?: string;
     arguments?: string[];
@@ -93,6 +91,7 @@ export interface RunResult {
 }
 
 export interface DebugSessionParams {
+    executionContext?: ExecutionContextReference;
     targets: BuildTargetIdentifier[];
     originId?: string;
     /// Build arguments (e.g. -configuration / -destination) — same selection
@@ -240,23 +239,6 @@ export interface Location {
     range: Range;
 }
 
-// Dynamic Selector Types
-export interface SelectorOption {
-    displayName: string;
-    description?: string;
-    arguments: string[];
-    metadata?: any; // For additional data like device ID
-}
-
-export interface SelectorConfiguration {
-    keyName: string;
-    displayLabel: string;
-    values: SelectorOption[];
-}
-
-export interface DynamicSelectorResponse {
-    selectors: SelectorConfiguration[];
-}
 export interface TaskIdentifier { id: string; parents?: string[] }
 export interface TaskStartParams {
     taskId: TaskIdentifier | string;
