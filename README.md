@@ -258,6 +258,12 @@ DAP `attach`. It does not compile or stop an existing session first. An explicit
 `target` or `connection` works as it does for Debug. To connect to an existing DAP
 service directly, set `connect` and the adapter's attach parameters.
 
+For BSP-managed sessions, **Restart** closes the current debug connection and
+requests a new endpoint with `debugSession/start`. Debug launches the target again.
+Attach detaches and attaches again without asking the adapter to terminate the app.
+The selected target, build policy, and explicit launch options are preserved.
+A manual `connect` configuration follows the adapter's restart capabilities.
+
 This flow requires a server that waits for DAP `launch` or `attach` before acting
 on the app. Update sourcekit-bsp and reconnect when using this flow. No additional
 BSP method or extension payload is used. Process discovery belongs to the server;

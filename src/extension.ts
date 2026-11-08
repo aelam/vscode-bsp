@@ -457,11 +457,11 @@ async function initializeBspExtension(context: vscode.ExtensionContext) {
     const debugConfigProvider = new BspDebugConfigurationProvider(
         (folder, token, options) => resolver.prepareDebug(options, folder, token)
     );
-    const debugAdapterFactory = new BspDebugAdapterDescriptorFactory();
+    const debugAdapterFactory = new BspDebugAdapterDescriptorFactory(debugConfigProvider);
 
     context.subscriptions.push(
         vscode.debug.registerDebugConfigurationProvider('bsp-debug', debugConfigProvider),
-        vscode.debug.registerDebugAdapterDescriptorFactory('bsp-debug', debugAdapterFactory)
+        debugAdapterFactory, vscode.debug.registerDebugAdapterDescriptorFactory('bsp-debug', debugAdapterFactory)
     );
 
     // Debug session lifecycle logging — reveals whether a session actually

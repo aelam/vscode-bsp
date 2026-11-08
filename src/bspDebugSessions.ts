@@ -3,6 +3,7 @@ import * as vscode from 'vscode';
 export class BspDebugSessions {
     private sessions = new Map<string, vscode.DebugSession>();
     private subscriptions: vscode.Disposable[] = [];
+    private ended = new WeakSet<vscode.DebugSession>();
 
     constructor(private owner: string) {}
 
@@ -14,7 +15,7 @@ export class BspDebugSessions {
     async stop(target: string, report: (message: string) => void): Promise<void> {
         this.observe();
         const active = vscode.debug.activeDebugSession;
-        if (active && this.matches(active, target)) { this.sessions.set(active.id, active); }
+        if (active && !this.ended.has(active) && this.matches(active, target)) { this.sessions.set(active.id, active); }
         for (const session of this.sessions.values()) {
             if (!this.matches(session, target)) { continue; }
             report('Stopping the previous debug session before running the target');
@@ -42,9 +43,13 @@ export class BspDebugSessions {
         if (this.subscriptions.length) { return; }
         this.subscriptions.push(
             vscode.debug.onDidStartDebugSession(session => {
+                this.ended.delete(session);
                 if (session.configuration.bspOwner === this.owner) { this.sessions.set(session.id, session); }
             }),
-            vscode.debug.onDidTerminateDebugSession(session => this.sessions.delete(session.id))
+            vscode.debug.onDidTerminateDebugSession(session => {
+                this.ended.add(session);
+                this.sessions.delete(session.id);
+            })
         );
     }
 

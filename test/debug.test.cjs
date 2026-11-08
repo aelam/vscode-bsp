@@ -146,7 +146,7 @@ test('F5 prepares one BSP request and does not start a nested VS Code session', 
         assert.equal(config.stopOnEntry, true);
         assert.equal(config.bspTarget, target.id.uri);
         assert.equal(config.bspOwner, '/hello/.bsp/config.json');
-        const descriptor = new BspDebugAdapterDescriptorFactory().createDebugAdapterDescriptor({ configuration: config });
+        const descriptor = await new BspDebugAdapterDescriptorFactory().createDebugAdapterDescriptor({ configuration: config });
         assert.equal(descriptor.implementation.endpoint.port, port);
         descriptor.implementation.dispose();
     }

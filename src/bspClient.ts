@@ -431,7 +431,7 @@ export class BspClient {
     ): Promise<vscode.DebugConfiguration> {
         if (this.contexts.enabled) {
             return this.executeContext('debug', { targets: [target.id] }, token, {}, false, [target], buildPolicy, undefined, request).then(result => {
-                const configuration = this.configurationForDebugResult(result as DebugSessionAddressResult, target.id.uri, request);
+                const configuration = this.configurationForDebugResult(result as DebugSessionAddressResult, target.id.uri, request, buildPolicy);
                 if (target.capabilities.canTest && !target.capabilities.canRun) { configuration.stopOnEntry = false; }
                 return configuration;
             });
@@ -441,7 +441,7 @@ export class BspClient {
             const testing = target.capabilities?.canTest === true && !target.capabilities.canRun;
             const result = await this.requestDebugSession(target, originId, cancellation, request);
             if (cancellation.isCancellationRequested) { throw new Error('Debug cancelled'); }
-            const configuration = this.configurationForDebugResult(result, target.id.uri, request);
+            const configuration = this.configurationForDebugResult(result, target.id.uri, request, buildPolicy);
             if (testing) { configuration.stopOnEntry = false; }
             return configuration;
         }, { token });
@@ -452,7 +452,7 @@ export class BspClient {
     ): Promise<vscode.DebugConfiguration> {
         const result = await this.executeContext('debug', { targets: resolved.targets }, token,
             {}, false, [], resolved.buildPolicy ?? 'build', resolved, request);
-        const configuration = this.configurationForDebugResult(result as DebugSessionAddressResult, resolved.targets[0].uri, request);
+        const configuration = this.configurationForDebugResult(result as DebugSessionAddressResult, resolved.targets[0].uri, request, resolved.buildPolicy);
         if (resolved.targets.every(id => this.buildTargets.some(target => target.id.uri === id.uri
             && target.capabilities.canTest && !target.capabilities.canRun))) { configuration.stopOnEntry = false; }
         return configuration;
@@ -539,7 +539,7 @@ export class BspClient {
                     const result = await this.connection.sendRequest<DebugSessionAddressResult>('debugSession/start', params, cancellation);
                     if (cancellation.isCancellationRequested) { throw new Error('Debug cancelled'); }
                     if (startDebug) {
-                        const configuration = this.configurationForDebugResult(result, resolved.targets[0].uri);
+                        const configuration = this.configurationForDebugResult(result, resolved.targets[0].uri, debugRequest, buildPolicy);
                         const targets = resolved.targets.map(id =>
                             [...knownTargets, ...this.buildTargets].find(target => target.id.uri === id.uri));
                         if (targets.length && targets.every(target => target?.capabilities.canTest && !target.capabilities.canRun)) {
@@ -875,11 +875,16 @@ export class BspClient {
     }
 
     private configurationForDebugResult(
-        result: DebugSessionAddressResult, targetId: string, request: 'launch' | 'attach' = 'launch'
+        result: DebugSessionAddressResult, targetId: string, request: 'launch' | 'attach' = 'launch',
+        buildPolicy: ContextBuildPolicy = 'build'
     ): vscode.DebugConfiguration {
         const config: vscode.DebugConfiguration = {
             ...debugConfiguration(result, `${request === 'attach' ? 'Attach' : 'Debug'} ${targetId}`, request),
             ...this.debugSessions.configuration(targetId)
+        };
+        config.bspRestart = {
+            type: 'bsp-debug', name: config.name, request, target: targetId,
+            connection: this.configPath, buildPolicy
         };
         if (request === 'attach') { config.bspAttach = true; }
         // A standard URI-only response has no adapter metadata. Preserve the user's configured commands.
