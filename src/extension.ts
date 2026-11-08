@@ -675,7 +675,14 @@ async function initializeBspExtension(context: vscode.ExtensionContext) {
     });
 
     const navigateToTargetFolderCommand = vscode.commands.registerCommand('bsp.revealTargetFolder', async (item) => {
-        await navigateToTargetFolder(item);
+        try {
+            const selected = await getOrSelectBuildTarget(item);
+            if (!selected) { return; }
+            await navigateToTargetFolder(selected);
+        } catch (error) {
+            logError('Failed to navigate to folder', error);
+            void vscode.window.showErrorMessage(`Failed to navigate to folder: ${error}`);
+        }
     });
 
     const cleanCacheCommand = vscode.commands.registerCommand('bsp.cleanCache', async item => {
