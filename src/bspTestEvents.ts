@@ -1,10 +1,14 @@
 import type { CancellationToken } from 'vscode';
 import { BuildTarget, StatusCode, TaskStartParams, TaskFinishParams, TaskProgressParams } from './bspTypes';
 
-export interface BspTestOptions {
+export interface BspOperationOptions {
     native?: boolean;
-    selection?: { dataKind: string; data: unknown };
     token?: CancellationToken;
+    onOutput?: (message: string) => void;
+}
+
+export interface BspTestOptions extends BspOperationOptions {
+    selection?: { dataKind: string; data: unknown };
 }
 
 export type BspTestEvent =

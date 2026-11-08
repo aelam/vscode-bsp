@@ -78,6 +78,17 @@ for (const transport of ['tcp', 'unix']) {
             command: 'initialize', success: true, body: {} });
         assert.equal((await client.next()).request_seq, 17);
 
+        const attach = { type: 'request', seq: 21, command: 'attach', arguments: {
+            pid: 42, bspAttach: true, bspOwner: '/workspace/.bsp/server.json', bspTarget: 'target://hello'
+        } };
+        adapter.handleMessage(attach);
+        const forwardedAttach = await backend.next();
+        assert.deepEqual(forwardedAttach.arguments, { pid: 42 });
+        assert.equal(attach.arguments.bspAttach, true);
+        await writer.write({ type: 'response', seq: 90, request_seq: forwardedAttach.seq,
+            command: 'attach', success: true });
+        assert.equal((await client.next()).request_seq, 21);
+
         await writer.write({ type: 'request', seq: 81, command: 'runInTerminal',
             arguments: { args: ['/tmp/test program', '中文'] } });
         const reverse = await client.next();

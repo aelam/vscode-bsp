@@ -28,6 +28,10 @@ export class BspDebugAdapter implements vscode.DebugAdapter {
     handleMessage(message: any): void {
         if (this.ended) { return; }
         if (!this.connection) { this.connect(); }
+        if (message.type === 'request' && ['launch', 'attach'].includes(message.command) && message.arguments) {
+            message = { ...message, arguments: { ...message.arguments } };
+            for (const key of ['bspOwner', 'bspTarget', 'bspAttach']) { delete message.arguments[key]; }
+        }
         this.bridge.fromClient(message);
     }
 

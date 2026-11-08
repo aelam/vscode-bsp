@@ -101,16 +101,15 @@ test('workspace LLDB commands reach target actions and F5 with launch overrides'
         assert.deepEqual(requests.at(-1).params.arguments, []);
         assert.equal(requests.at(-1).params.dataKind, undefined);
         assert.deepEqual(starts.at(-1)[1].initCommands, lldbInitCommands);
-        const f5 = await provider.resolveDebugConfiguration(folder, { request: 'launch' });
+        const f5 = await provider.resolveDebugConfigurationWithSubstitutedVariables(folder, { request: 'launch' });
         assert.deepEqual(f5.initCommands, lldbInitCommands);
         for (const override of [[], ['settings set target.preload-symbols false']]) {
-            const config = await provider.resolveDebugConfiguration(folder,
+            const config = await provider.resolveDebugConfigurationWithSubstitutedVariables(folder,
                 { request: 'launch', initCommands: override });
             assert.deepEqual(config.initCommands, override);
         }
-        for (dataKind of ['other', undefined]) {
-            assert.equal((await client.prepareDebugConfiguration(target)).initCommands, undefined);
-        }
+        dataKind = 'other';
+        assert.equal((await client.prepareDebugConfiguration(target)).initCommands, undefined);
         dataKind = 'lldb';
         lldbInitCommands = ['valid', 42];
         await assert.rejects(client.prepareDebugConfiguration(target), /must be an array of strings/);
@@ -140,7 +139,7 @@ test('F5 prepares one BSP request and does not start a nested VS Code session', 
         return client.prepareDebugConfiguration(target, receivedToken);
     });
     for (const port of [20001, 20002]) {
-        const config = await provider.resolveDebugConfiguration(folder,
+        const config = await provider.resolveDebugConfigurationWithSubstitutedVariables(folder,
             { type: 'bsp-debug', request: 'launch', name: 'BSP Debug', stopOnEntry: true }, token);
         assert.equal(config.connect.port, port);
         assert.equal(config.request, 'attach');
@@ -165,7 +164,7 @@ test('target toolbar starts one session and propagates VS Code startup failures'
     assert.equal(starts[0][0], folder);
     const configuration = starts[0][1];
     const provider = new BspDebugConfigurationProvider(() => assert.fail('Must not request a second endpoint'));
-    assert.equal(await provider.resolveDebugConfiguration(folder, configuration), configuration);
+    assert.equal(await provider.resolveDebugConfigurationWithSubstitutedVariables(folder, configuration), configuration);
     startResult = false;
     try { await assert.rejects(client.debug(target), /Failed to start VSCode debug session/); }
     finally { startResult = true; starts.length = 0; client.debugSessions.dispose(); }
@@ -193,7 +192,7 @@ for (const entry of ['toolbar', 'F5', 'prepare without token']) {
                 assert.equal(starts.length, 1);
             } else if (entry === 'F5') {
                 const provider = new BspDebugConfigurationProvider((_folder, token) => client.prepareDebugConfiguration(target, token));
-                const config = await provider.resolveDebugConfiguration(folder,
+                const config = await provider.resolveDebugConfigurationWithSubstitutedVariables(folder,
                     { type: 'bsp-debug', request: 'launch', name: 'BSP Debug' }, cancellation.token);
                 assert.equal(config.connect.port, 25000);
             } else {
@@ -224,10 +223,10 @@ for (const entry of ['toolbar', 'F5', 'prepare without token']) {
 
 test('cancelled selection does not open launch.json or create a debug session', async () => {
     const provider = new BspDebugConfigurationProvider(async () => undefined);
-    assert.equal(await provider.resolveDebugConfiguration(folder, {}), null);
+    assert.equal(await provider.resolveDebugConfigurationWithSubstitutedVariables(folder, {}), null);
     const cancelled = new BspDebugConfigurationProvider(() => assert.fail('Cancelled request'));
-    assert.equal(await cancelled.resolveDebugConfiguration(folder, {}, { isCancellationRequested: true }), null);
-    await assert.rejects(provider.resolveDebugConfiguration(folder, { request: 'attach' }), /live DAP address/);
+    assert.equal(await cancelled.resolveDebugConfigurationWithSubstitutedVariables(folder, {}, { isCancellationRequested: true }), null);
+    assert.equal(await provider.resolveDebugConfigurationWithSubstitutedVariables(folder, { request: 'attach' }), null);
 });
 
 test('default configuration and schema are registered under contributes without a fixed port', () => {
@@ -237,6 +236,7 @@ test('default configuration and schema are registered under contributes without 
     assert.equal(contribution.program, undefined);
     assert.ok(contribution.configurationAttributes.launch.properties.stopOnEntry);
     assert.ok(contribution.configurationAttributes.attach.properties.connect);
+    assert.equal(contribution.configurationAttributes.attach.required?.includes('connect') ?? false, false);
     const defaults = new BspDebugConfigurationProvider(async () => undefined).provideDebugConfigurations();
     assert.deepEqual(contribution.initialConfigurations, defaults);
     assert.equal(JSON.stringify(contribution).includes('5005'), false);
@@ -261,7 +261,7 @@ test('test targets use the debug icon and do not stop at entry', async () => {
             assert.match(starts.at(-1)[1].name, /Debug Tests/);
         }
         const provider = new BspDebugConfigurationProvider(() => client.prepareDebugConfiguration(target));
-        const f5 = await provider.resolveDebugConfiguration(folder,
+        const f5 = await provider.resolveDebugConfigurationWithSubstitutedVariables(folder,
             { type: 'bsp-debug', request: 'launch', name: 'Tests', stopOnEntry: true });
         assert.equal(f5.stopOnEntry, false);
         await assert.rejects(client.debugTests({ ...target, capabilities: { canTest: true, canDebug: false } }), /does not support/);
@@ -311,3 +311,111 @@ for (const action of ['compile', 'debugTests']) {
         } finally { source.dispose(); client.debugSessions.dispose(); starts.length = 0; }
     });
 }
+
+
+test('minimal Attach requests only a standard DAP endpoint and preserves an explicit PID', async () => {
+    const client = new BspClient(folder.uri), target = { id: { uri: 'target://hello' } };
+    const requests = [];
+    client.stopPreviousDebugSession = () => assert.fail('Attach must not stop a running app');
+    client.connection = { sendRequest: async (method, params) => {
+        requests.push({ method, params });
+        assert.equal(method, 'debugSession/start');
+        assert.deepEqual(Object.keys(params).sort(), ['arguments', 'originId', 'targets']);
+        assert.deepEqual(params.targets, [target.id]);
+        assert.deepEqual(params.arguments, []);
+        return { uri: 'tcp://127.0.0.1:23456' };
+    } };
+    const provider = new BspDebugConfigurationProvider((_folder, token, options) => {
+        assert.equal(options.request, 'attach');
+        return client.prepareDebugConfiguration(target, token, 'build', options.request);
+    });
+    try {
+        for (const pid of [undefined, 1234]) {
+            const result = await provider.resolveDebugConfigurationWithSubstitutedVariables(folder,
+                { type: 'bsp-debug', request: 'attach', name: 'BSP Attach', pid });
+            assert.equal(result.request, 'attach');
+            assert.equal(result.pid, pid);
+            assert.equal(result.connect.port, 23456);
+            assert.equal(result.bspAttach, true);
+        }
+        assert.equal(requests.length, 2);
+        assert.equal(starts.length, 0);
+        await assert.rejects(provider.resolveDebugConfigurationWithSubstitutedVariables(folder,
+            { request: 'attach', pid: 0 }), /positive integer/);
+        assert.equal(requests.length, 2);
+    } finally { client.debugSessions.dispose(); }
+});
+
+test('a standard URI result uses launch for Debug and attach for Attach', () => {
+    const address = { uri: 'tcp://127.0.0.1:23456' };
+    assert.equal(debugConfiguration(address, 'Hello').request, 'launch');
+    assert.equal(debugConfiguration(address, 'Hello', 'attach').request, 'attach');
+});
+
+test('manual Attach keeps its endpoint without requesting a BSP session', async () => {
+    const provider = new BspDebugConfigurationProvider(() => assert.fail('Manual connection'));
+    const config = { type: 'bsp-debug', request: 'attach', name: 'Remote', pid: 42,
+        connect: { host: 'localhost', port: 23456 } };
+    assert.equal(await provider.resolveDebugConfigurationWithSubstitutedVariables(folder, config), config);
+});
+
+
+test('stopping a session that attached to an existing process requests detach', async () => {
+    const listeners = new Set();
+    const previousTerminate = vscode.debug.onDidTerminateDebugSession;
+    const previousStop = vscode.debug.stopDebugging;
+    vscode.debug.onDidTerminateDebugSession = listener => {
+        listeners.add(listener); return { dispose: () => listeners.delete(listener) };
+    };
+    const client = new BspClient(folder.uri);
+    const session = { id: 'existing-process', type: 'bsp-debug', configuration: {
+        ...client.debugSessions.configuration('target://hello'), bspAttach: true
+    }, customRequest: async (command, arguments) => {
+        assert.equal(command, 'disconnect');
+        assert.deepEqual(arguments, { terminateDebuggee: false });
+    } };
+    vscode.debug.activeDebugSession = session;
+    vscode.debug.stopDebugging = async received => {
+        assert.equal(received, session);
+        for (const listener of [...listeners]) { listener(session); }
+    };
+    try { await client.debugSessions.stop('target://hello', () => {}); }
+    finally {
+        client.debugSessions.dispose();
+        vscode.debug.activeDebugSession = undefined;
+        vscode.debug.onDidTerminateDebugSession = previousTerminate;
+        vscode.debug.stopDebugging = previousStop;
+    }
+});
+
+
+test('URI-only debug responses preserve configured commands for launch, Attach, and target actions', async () => {
+    const client = new BspClient(folder.uri), target = { id: { uri: 'target://hello' } };
+    client.connection = { sendRequest: async (method, params) => {
+        assert.equal(method, 'debugSession/start');
+        assert.deepEqual(Object.keys(params).sort(), ['arguments', 'originId', 'targets']);
+        return { uri: 'tcp://127.0.0.1:23456' };
+    } };
+    lldbInitCommands = ['settings set symbols.enable-lldb-index-cache false'];
+    const provider = new BspDebugConfigurationProvider((_folder, token, options) =>
+        client.prepareDebugConfiguration(target, token, 'build', options.request));
+    try {
+        await client.debug(target);
+        assert.deepEqual(starts.at(-1)[1].initCommands, lldbInitCommands);
+        for (const request of ['launch', 'attach']) {
+            const resolved = await provider.resolveDebugConfigurationWithSubstitutedVariables(folder, { request });
+            assert.equal(resolved.request, request);
+            assert.deepEqual(resolved.initCommands, lldbInitCommands);
+            for (const initCommands of [[], ['settings set target.preload-symbols false']]) {
+                const override = await provider.resolveDebugConfigurationWithSubstitutedVariables(folder, { request, initCommands });
+                assert.deepEqual(override.initCommands, initCommands);
+            }
+        }
+        lldbInitCommands = [];
+        assert.equal((await client.prepareDebugConfiguration(target)).initCommands, undefined);
+    } finally {
+        lldbInitCommands = [];
+        starts.length = 0;
+        client.debugSessions.dispose();
+    }
+});

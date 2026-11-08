@@ -64,8 +64,8 @@ export class BspDebugSessions {
             const timer = setTimeout(() => finish(new Error(
                 'The previous debug session did not stop. Stop it in Run and Debug, then retry.'
             )), 15000);
-            // An attach session must terminate its app before a new installation.
-            void session.customRequest('disconnect', { terminateDebuggee: true }).then(
+            // Preserve a process that was attached without launching.
+            void session.customRequest('disconnect', { terminateDebuggee: session.configuration.bspAttach !== true }).then(
                 () => { if (!finished) { void vscode.debug.stopDebugging(session).then(undefined, finish); } },
                 error => finish(error)
             );

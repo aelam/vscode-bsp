@@ -147,22 +147,127 @@ Case navigation and selection require a discovery adapter; display names alone
 do not make cases runnable. With sourcekit-bsp, case results arrive after each
 target completes. See its [test selection contract](https://github.com/aelam/sourcekit-bsp/blob/main/Docs/wiki/Build-Run-Test-Debug.md#test-discovery-and-selection).
 
+### Tasks and build shortcuts
+
+**Tasks: Run Task** lists `compile`, `run`, and `test` tasks for connected targets.
+To configure a default build task, add `.vscode/tasks.json`:
+
+```json
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "BSP Build",
+      "type": "bsp",
+      "operation": "compile",
+      "connection": ".bsp/sourcekit-bsp.json",
+      "target": "Hello",
+      "group": { "kind": "build", "isDefault": true },
+      "problemMatcher": []
+    }
+  ]
+}
+```
+
+Replace the connection file and target with values from your project.
+**Tasks: Run Build Task** (`Ctrl+Shift+B`, or `Cmd+Shift+B` on macOS) runs the default task.
+Set `operation` to `run` or `test` to execute a target. Set `group` to `test` for
+**Tasks: Run Test Task**. Debugging uses `launch.json`.
+
+| Field | Meaning |
+| --- | --- |
+| `operation` | Required for tasks: `compile`, `run`, or `test`. |
+| `target` | Required for tasks. Use an exact BSP target URI or a unique display name. Omit in `launch.json` to choose a target. |
+| `connection` | Optional path to a discovered `.bsp/*.json` file, relative to the task or launch workspace folder, or absolute. Use it to distinguish servers. |
+| `buildPolicy` | `build` by default. `reuse` uses existing products and requires the server's Build Context support. Compile only accepts `build`. |
+
+Ambiguous targets fail with an error. A configured connection can reconnect when
+needed. Tasks and F5 use the current Build Context choices for settings such as
+configuration and destination. They do not store a second set of these choices.
+Servers without Build Context use standard BSP requests; Run, Test, and Debug
+compile first when the target supports compilation.
+
+Task terminals show request progress and logs with a matching `originId`.
+Logs without an `originId` remain in **Output → vscode-bsp-log**. Diagnostics still
+appear in Problems, and test events still update Testing. Stop a task with
+**Tasks: Terminate Task** or `Ctrl+C`. Failed and cancelled tasks return a nonzero
+exit code so dependent tasks do not proceed. Background tasks are not supported.
+
+
 ### Debugging with F5
 
-Choose **BSP Debug** in Run and Debug, then press F5. The server supplies the
-debug adapter address and launch or attach parameters; no fixed port is needed:
+Choose **BSP Debug** in Run and Debug, then press F5. To fix the target and avoid
+the target picker, add `.vscode/launch.json`:
 
 ```json
 {
   "version": "0.2.0",
   "configurations": [
-    { "name": "BSP Debug", "type": "bsp-debug", "request": "launch" }
+    {
+      "name": "BSP Build + Debug",
+      "type": "bsp-debug",
+      "request": "launch",
+      "connection": ".bsp/sourcekit-bsp.json",
+      "target": "Hello",
+      "buildPolicy": "build"
+    }
   ]
 }
 ```
 
-The target's **Debug Target** action uses the same path. Manual Attach is for a
-live debug adapter endpoint whose address you already know.
+This configuration builds and then starts debugging. It needs no `preLaunchTask`.
+The server supplies the debug adapter address; no fixed port is needed. The
+client sends DAP `launch` to start debugging. Older servers can still return
+launch or attach parameters in the debug response. Omit `target` to use the current Build Context. If no
+Context selection is saved, Debug opens a target picker. An explicit `target`
+always takes priority.
+The target's **Debug Target** action uses the same BSP execution path.
+
+If your server supports `reuse`, you can use the **BSP Build** task above as a
+`preLaunchTask` instead. Use this launch configuration to avoid building twice:
+
+```json
+{
+  "name": "BSP Debug after task",
+  "type": "bsp-debug",
+  "request": "launch",
+  "connection": ".bsp/sourcekit-bsp.json",
+  "target": "Hello",
+  "preLaunchTask": "BSP Build",
+  "buildPolicy": "reuse"
+}
+```
+
+Keep the task and launch connection and target consistent. VS Code runs the task
+before the extension requests a debug session. Without `preLaunchTask`, `reuse`
+starts debugging existing products. Servers that do not advertise `reuse` reject
+this policy.
+
+Attach uses the same Context-first target selection:
+
+```json
+{
+  "name": "BSP Attach",
+  "type": "bsp-debug",
+  "request": "attach"
+}
+```
+
+The client calls `debugSession/start`, connects to the returned address, and sends
+DAP `attach`. It does not compile or stop an existing session first. An explicit
+`target` or `connection` works as it does for Debug. To connect to an existing DAP
+service directly, set `connect` and the adapter's attach parameters.
+
+This flow requires a server that waits for DAP `launch` or `attach` before acting
+on the app. Update sourcekit-bsp and reconnect when using this flow. No additional
+BSP method or extension payload is used. Process discovery belongs to the server;
+standard BSP and DAP do not define a generic process-list request.
+
+sourcekit-bsp supports Attach for iOS simulator apps and macOS executables,
+including SwiftPM. One matching process is selected automatically. If several
+processes match, set `pid` in the configuration. No match produces an error.
+Physical-device and test Attach are not supported; their existing Debug launch
+support is unchanged.
 
 To debug tests, select one whole target with both `canTest` and `canDebug` and
 use **Debug Test Target** in Testing, or **BSP: Debug Tests**. Individual cases
@@ -172,7 +277,9 @@ on macOS and app-hosted unit tests on an iOS simulator; UI tests and physical-de
 test debugging are not supported.
 
 For LLDB, `bsp.debug.lldbInitCommands` applies to F5 and target debug actions.
-An explicit `initCommands` in `launch.json` overrides it. If LLDB crashes in
+It also applies when the server returns only a standard DAP URI, with no adapter
+type. No commands are added by default. An explicit `initCommands` in `launch.json`
+overrides the setting, including an empty array. If LLDB crashes in
 `Symbol::ResolveReExportedSymbol`, this setting disables its symbol index cache
 for the session; symbol loading can take longer:
 

@@ -2,7 +2,7 @@ import { TaskProgressParams, TaskStartParams, TaskFinishParams } from './bspType
 
 export interface ProgressUpdate { message?: string; increment?: number }
 type Report = (update: ProgressUpdate) => void;
-interface Session { report: Report; close?: () => void; rootId?: string; percent: number }
+interface Session { originId?: string; report: Report; close?: () => void; rootId?: string; percent: number }
 
 export function taskId(value: TaskStartParams['taskId']): string {
     return typeof value === 'string' ? value : value.id;
@@ -14,7 +14,7 @@ export class BspProgress {
     private tasks = new Map<string, Session>();
 
     register(originId: string, report: Report): void {
-        this.origins.set(originId, { report, percent: 0 });
+        this.origins.set(originId, { originId, report, percent: 0 });
     }
 
     unregister(originId: string): void {
@@ -66,6 +66,8 @@ export class BspProgress {
             this.remove(session);
         }
     }
+
+    originForTask(id: string): string | undefined { return this.tasks.get(id)?.originId; }
 
     isBackground(id: string): boolean { return this.tasks.get(id)?.close !== undefined; }
 

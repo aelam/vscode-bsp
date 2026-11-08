@@ -15,6 +15,7 @@ class Emitter {
     dispose() { this.listeners.clear(); }
 }
 const bars = [], notices = [], warnings = [], errors = [], progressWindows = [], output = [];
+let outputShows = 0;
 let startDebugging = async () => true;
 let confirm = async () => undefined;
 const vscode = {
@@ -50,7 +51,7 @@ try {
     ({ BspDebugConfigurationProvider } = require('../out/debugProvider'));
     ({ cleanBuildCache } = require('../out/cleanCache'));
     require('../out/logger').initializeBuildLogger({ info: message => output.push(message),
-        error: message => output.push(message), warn: message => output.push(message), show() {} });
+        error: message => output.push(message), warn: message => output.push(message), show() { outputShows++; } });
 } finally { Module._load = load; }
 const target = (id='app') => ({ id: { uri: 'target://' + id }, displayName: id, tags: ['application'], languageIds: ['swift'], dependencies: [], capabilities: { canCompile: true, canTest: true, canRun: true, canDebug: true } });
 function client() {
@@ -122,7 +123,7 @@ test('debug stays locked while VS Code connects and repeated F5 returns without 
         c.requests[0].resolve({uri:'tcp://127.0.0.1:12345'}); await tick();
         assert.equal(c.operations.get(t.id.uri).message,'Connecting debugger');
         const provider=new BspDebugConfigurationProvider(()=>c.prepareDebugConfiguration(t));
-        assert.equal(await provider.resolveDebugConfiguration(undefined,{}),null);
+        assert.equal(await provider.resolveDebugConfigurationWithSubstitutedVariables(undefined,{}),null);
         assert.match(notices.at(-1),/Wait for the current operation/);
         assert.equal(c.requests.length,1);
         adapter.resolve(false); await assert.rejects(pending,/Failed to start/);
@@ -394,4 +395,117 @@ test('Without Building menus require reuse support for contexts and retain legac
         assert.match(contextMenu.when, /canReuseBuild/);
         assert.match(contextMenu.group, /advanced/);
     }
+});
+
+test('task terminals isolate request output and cancellation without revealing Output', async () => {
+    const { CancellationTokenSource } = require('vscode-jsonrpc/node');
+    const c = client(), a = [], b = [], source = new CancellationTokenSource();
+    const before = { windows: progressWindows.length, errors: errors.length, notices: notices.length, shown: outputShows };
+    const first = c.compile(target('one'), source.token, { native: true, onOutput: line => a.push(line) });
+    const second = c.run(target('two'), undefined, { native: true, onOutput: line => b.push(line) });
+    await tick();
+    const [one, two] = c.requests;
+    const send = (method, params) => c.handlers.get(method)(params);
+    send('build/taskStart', { taskId: { id: 'one' }, originId: one.params.originId, message: 'Build one' });
+    send('build/taskStart', { taskId: { id: 'child', parents: ['one'] }, message: 'Compile child' });
+    send('build/taskProgress', { taskId: { id: 'child' }, message: 'Child progress' });
+    send('build/logMessage', { originId: one.params.originId, type: 1, message: 'Error one' });
+    send('build/logMessage', { originId: two.params.originId, type: 3, message: 'Output two' });
+    send('build/logMessage', { type: 3, message: 'Unattributed output' });
+    assert.ok(a.includes('Child progress')); assert.ok(a.includes('Error one'));
+    assert.ok(b.includes('Output two'));
+    assert.ok(!b.includes('Error one')); assert.ok(!a.includes('Output two'));
+    assert.ok(!a.includes('Unattributed output') && !b.includes('Unattributed output'));
+    assert.ok(output.includes('Unattributed output'));
+    source.cancel();
+    assert.equal(one.token.isCancellationRequested, true); assert.equal(two.token.isCancellationRequested, false);
+    one.resolve({ statusCode: 3 }); two.resolve({ statusCode: 1 }); await Promise.all([first, second]);
+    assert.deepEqual({ windows: progressWindows.length, errors: errors.length, notices: notices.length, shown: outputShows }, before);
+    const lengths = [a.length, b.length];
+    send('build/logMessage', { originId: one.params.originId, type: 3, message: 'Late one' });
+    send('build/taskProgress', { taskId: { id: 'child' }, message: 'Late child' });
+    assert.deepEqual([a.length, b.length], lengths);
+    const failed = c.compile(target('one'), undefined, { native: true, onOutput: line => a.push(line) });
+    c.requests[2].reject(new Error('Transport failed')); await assert.rejects(failed, /Transport failed/);
+    const count = a.length;
+    send('build/logMessage', { originId: c.requests[2].params.originId, type: 3, message: 'Late failure' });
+    assert.equal(a.length, count);
+    source.dispose(); c.debugSessions.dispose();
+});
+
+test('task tests retain native Testing events in standard and context modes', async () => {
+    for (const context of [false, true]) {
+        const c = client(), events = [], messages = [], selected = target('tests');
+        c.onTestEvent(event => events.push(event));
+        if (context) {
+            c.contexts.negotiate({ bspExtensions: { 'vscode-bsp.build-context': {
+                version: '0.1', required: true, operations: ['test'], buildPolicies: ['build', 'reuse']
+            } } });
+        }
+        const sendRequest = c.connection.sendRequest;
+        c.connection.sendRequest = (method, params, token) => method === 'workspace/contextOptions'
+            ? Promise.resolve({ dimensions: [], selection: {} }) : sendRequest(method, params, token);
+        const pending = c.test(selected, { native: true, onOutput: message => messages.push(message) });
+        if (context) {
+            await tick();
+            assert.equal(c.requests[0].method, 'workspace/resolveContext');
+            c.requests[0].resolve({ id: 'test-context', operation: 'test', targets: [selected.id], selection: {} });
+            await tick();
+        }
+        const request = c.requests.at(-1);
+        assert.equal(request.method, 'buildTarget/test');
+        const { originId } = request.params;
+        c.handlers.get('build/logMessage')({ originId, type: 3, message: 'Test output' });
+        request.resolve({ statusCode: 1 }); await pending;
+        assert.ok(events.some(event => event.kind === 'started' && event.originId === originId));
+        assert.ok(events.some(event => event.kind === 'finished' && event.originId === originId && event.status === 1));
+        assert.ok(messages.includes('Test output'));
+        c.debugSessions.dispose();
+    }
+});
+
+test('Debug executes the resolved Context once and returns its configuration to F5', async () => {
+    const c = client(), selected = target('hello'), requests = [];
+    c.buildTargets = [selected];
+    c.contexts.negotiate({ bspExtensions: { 'vscode-bsp.build-context': {
+        version: '0.1', required: true, operations: ['debug'], buildPolicies: ['build', 'reuse']
+    } } });
+    c.prepareExecutionContext = () => assert.fail('Context must not be prepared twice');
+    c.contexts.resolve = () => assert.fail('Context must not be resolved twice');
+    c.connection.sendRequest = async (method, params) => {
+        requests.push({ method, params });
+        assert.equal(method, 'debugSession/start');
+        assert.deepEqual(params.targets, [selected.id]);
+        assert.deepEqual(params.executionContext, { id: 'resolved-context' });
+        return { uri: 'tcp://127.0.0.1:23456', dataKind: 'lldb', data: { request: 'attach', pid: 12 } };
+    };
+    const result = await c.prepareResolvedDebugConfiguration({ id: 'resolved-context', operation: 'debug',
+        targets: [selected.id], selection: { profile: 'selected' }, buildPolicy: 'reuse' });
+    assert.equal(result.connect.port, 23456); assert.equal(result.pid, 12);
+    assert.equal(requests.length, 1);
+});
+
+
+test('Attach reuses its resolved Context without stopping a session or adding BSP payloads', async () => {
+    const c = client(), selected = target('hello'), requests = [];
+    c.buildTargets = [selected];
+    c.contexts.negotiate({ bspExtensions: { 'vscode-bsp.build-context': {
+        version: '0.1', required: true, operations: ['debug'], buildPolicies: ['build', 'reuse']
+    } } });
+    c.prepareExecutionContext = () => assert.fail('Context must not be prepared twice');
+    c.contexts.resolve = () => assert.fail('Context must not be resolved twice');
+    c.stopPreviousDebugSession = () => assert.fail('Attach must preserve the running process');
+    c.connection.sendRequest = async (method, params) => {
+        requests.push({ method, params });
+        assert.equal(method, 'debugSession/start');
+        assert.deepEqual(Object.keys(params).sort(), ['executionContext', 'originId', 'targets']);
+        assert.deepEqual(params.executionContext, { id: 'resolved-context' });
+        return { uri: 'tcp://127.0.0.1:23456' };
+    };
+    try {
+        const result = await c.prepareResolvedDebugConfiguration({ id: 'resolved-context', operation: 'debug',
+            targets: [selected.id], selection: { profile: 'selected' }, buildPolicy: 'reuse' }, undefined, 'attach');
+        assert.equal(result.request, 'attach'); assert.equal(result.bspAttach, true);
+        assert.equal(result.connect.port, 23456); assert.equal(requests.length, 1);
+    } finally { c.debugSessions.dispose(); }
 });

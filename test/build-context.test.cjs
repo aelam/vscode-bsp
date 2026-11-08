@@ -115,7 +115,7 @@ const vscode = {
     QuickPickItemKind: { Separator: -1 },
     ProgressLocation: { Notification: 15 },
     languages: { createDiagnosticCollection: () => ({ clear() {} }) },
-    workspace: { getWorkspaceFolder: () => ({ uri: { fsPath: '/workspace' } }), getConfiguration: () => ({ get: () => undefined }) },
+    workspace: { getWorkspaceFolder: () => ({ uri: { fsPath: '/workspace' } }), getConfiguration: () => ({ get: (_key, defaultValue) => defaultValue }) },
     debug: { onDidStartDebugSession: disposable, onDidTerminateDebugSession: disposable,
         startDebugging: async (_folder, config) => { starts.push(config); return true; } },
     window: {
