@@ -199,8 +199,8 @@ Run `npm run test:protocol` to check progress, cancellation, diagnostics, and ou
 The native VS Code **Testing** panel lists test targets from connected BSP servers.
 Use **Run Tests** to run a target, or run all targets from the panel toolbar.
 The **BSP: Build and Test Target** command also publishes results to this panel.
-Execution settings inherit the workspace Contexts choices and test-operation overrides,
-or from the existing BSP Targets selectors when the server does not use contexts.
+Execution settings inherit the workspace Contexts choices,
+or come from the existing BSP Targets selectors when the server does not use contexts.
 The Stop button cancels the corresponding BSP request.
 
 Targets that advertise both `canTest` and `canDebug` also offer **Debug Test
@@ -226,6 +226,12 @@ private Swift extension APIs. It requires SourceKit-LSP test discovery version 2
 and exactly one valid Swift/C-family BSP configuration in the workspace's `.bsp`
 directory, matching the selected connection. Source edits refresh locations
 automatically; the Testing panel's Refresh action retries discovery.
+The adapter opens one Swift source file at a time, requests its tests, then
+closes it. This limits pending document work in large projects. Requests time
+out after 30 seconds; failures include the affected file and recent SourceKit-LSP
+error output when available.
+After a timeout, the adapter stops its discovery session. The next refresh
+starts a new session.
 
 Multiple Swift/C-family connections can share one workspace root for target-level
 Compile, Run, Test, and Debug when the servers advertise those actions.
@@ -490,8 +496,8 @@ Clicking a button supplies the operation for resolution. Target operations inher
 provide. Workspace-only dimensions do not override the requested target. Invalid
 shared choices are rejected instead of falling back to target defaults. Internal
 target-only choices remain separate for each connection. Shared preferences apply
-to operations unless an operation has an explicit override. Only explicit preferences are saved; resolved context
-IDs remain tied to the current server session.
+to every operation. Saved operation overrides from earlier versions are ignored.
+Only explicit preferences are saved; resolved context IDs remain tied to the current server session.
 
 Option pickers highlight the current choice. Moving the highlight does not save
 a choice; confirm an item to apply it. Optional fields offer **Automatic**, which

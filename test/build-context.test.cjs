@@ -40,7 +40,7 @@ test('negotiates only the supported private contract and requires strict executi
     contexts.disconnect(); assert.equal(contexts.enabled, false);
 });
 
-test('persists explicit preferences by connection, workspace, target scope, and operation', async () => {
+test('persists shared preferences by connection, workspace, and target scope', async () => {
     const data = new Map(), storage = { get: key => data.get(key), update: async (key, value) => data.set(key, structuredClone(value)) };
     const create = identity => {
         const server = transport(), contexts = new BuildContexts(server.request);
@@ -48,16 +48,16 @@ test('persists explicit preferences by connection, workspace, target scope, and 
         return contexts;
     };
     const contexts = create('config-A');
-    await contexts.setSelection(scope, 'run', { 'provider.mode': 'release' });
-    await contexts.options({}, 'compile');
+    await contexts.setSelection(scope, { 'provider.mode': 'release' });
+    await contexts.options({});
     await contexts.resolve(scope, 'run');
     const restored = create('config-A');
-    assert.deepEqual(restored.getSelection(scope, 'run'), { 'provider.mode': 'release' });
-    assert.deepEqual(restored.getSelection({ ...scope, workspaceUri: 'file:///workspace' }, 'run'), { 'provider.mode': 'release' });
-    for (const [s, op] of [[{}, 'run'], [scope, 'debug'], [{ ...scope, workspaceUri: 'file:///other' }, 'run']]) {
-        assert.deepEqual(restored.getSelection(s, op), {});
+    assert.deepEqual(restored.getSelection(scope), { 'provider.mode': 'release' });
+    assert.deepEqual(restored.getSelection({ ...scope, workspaceUri: 'file:///workspace' }), { 'provider.mode': 'release' });
+    for (const other of [{}, { ...scope, workspaceUri: 'file:///other' }]) {
+        assert.deepEqual(restored.getSelection(other), {});
     }
-    assert.deepEqual(create('config-B').getSelection(scope, 'run'), {});
+    assert.deepEqual(create('config-B').getSelection(scope), {});
     const saved = JSON.stringify([...data.values()]);
     assert.doesNotMatch(saved, /context-run|debug/);
     assert.equal(Object.keys([...data.values()][0]).length, 1, 'Defaults and resolved IDs must not be saved');
@@ -90,9 +90,9 @@ test('resolve captures preferences before async discovery and propagates cancell
         return resolved(params);
     });
     contexts.negotiate(accepted());
-    await contexts.setSelection({}, 'run', { 'provider.mode': 'release' });
+    await contexts.setSelection({}, { 'provider.mode': 'release' });
     const pending = contexts.resolve({}, 'run');
-    await contexts.setSelection({}, 'run', { 'provider.mode': 'debug' });
+    await contexts.setSelection({}, { 'provider.mode': 'debug' });
     release(); await pending;
     assert.equal(calls[1].params.selection['provider.mode'], 'release');
     const source = new CancellationTokenSource();
@@ -197,7 +197,7 @@ test('real client initialization offers the extension and keeps old servers on s
 
 test('target actions, native test selections, and F5 send the operation context without legacy flags', async () => {
     const c = client(), events = []; c.onTestEvent(event => events.push(event));
-    await c.contexts.setSelection({}, 'run', { 'provider.mode': 'release' });
+    await c.contexts.setSelection({}, { 'provider.mode': 'release' });
     await c.run(target);
     const run = c.requests.at(-1);
     assert.equal(run.method, 'buildTarget/run'); assert.deepEqual(run.params.target, id);
@@ -271,11 +271,11 @@ test('workspace GUI shows all fields immediately, enables dependencies after Sch
     await provider.selectDimension(dimensions[0]);
     dimensions = await provider.getChildren(shared);
     assert.deepEqual(dimensions.map(item => item.label), ['Scheme', 'Configuration', 'Destination']);
-    await c.contexts.setSelection({}, undefined, { 'xcode.scheme': 'A', 'xcode.configuration': 'release', 'xcode.destination': 'old' });
+    await c.contexts.setSelection({}, { 'xcode.scheme': 'A', 'xcode.configuration': 'release', 'xcode.destination': 'old' });
     picks.push(items => items.find(item => item.option?.id === 'B'));
     await provider.selectDimension(dimensions[0]);
-    assert.deepEqual(c.contexts.getSelection({}, 'run'), { 'xcode.scheme': 'B', 'xcode.configuration': 'release' });
-    assert.deepEqual(c.contexts.getSelection(scope, 'run'), {});
+    assert.deepEqual(c.contexts.getSelection({}), { 'xcode.scheme': 'B', 'xcode.configuration': 'release' });
+    assert.deepEqual(c.contexts.getSelection(scope), {});
     assert.ok(c.requests.every(request => request.params.operation === undefined), 'Shared configuration must not preselect an operation');
     await provider.execute(shared, 'run');
     assert.equal(c.requests.at(-1).method, 'buildTarget/run');
@@ -289,13 +289,13 @@ test('target configuration stays separate from workspace and equal target IDs on
     picks.push(items => items.find(item => item.option?.id === 'release'));
     picks.push(() => undefined);
     await provider.configure({ connectionId: 'connection-0', buildTarget: target });
-    assert.deepEqual(a.contexts.getSelection(scope, 'run'), { 'provider.mode': 'release' });
-    assert.deepEqual(a.contexts.getSelection({}, 'run'), {});
-    assert.deepEqual(b.contexts.getSelection(scope, 'run'), {});
+    assert.deepEqual(a.contexts.getSelection(scope), { 'provider.mode': 'release' });
+    assert.deepEqual(a.contexts.getSelection({}), {});
+    assert.deepEqual(b.contexts.getSelection(scope), {});
     const roots = await provider.getChildren(); assert.equal(roots.length, 2);
     assert.ok(roots.every(item => !item.entry.scope.targets));
     await provider.getChildren(roots[0]);
-    assert.deepEqual(a.contexts.getSelection({}, 'run'), {}, 'Browsing must not change workspace choices');
+    assert.deepEqual(a.contexts.getSelection({}), {}, 'Browsing must not change workspace choices');
     provider.dispose();
 });
 
@@ -328,7 +328,7 @@ test('a stale target configuration command cannot select a different connection'
     const c = client(), provider = new BuildContextProvider(manager([c]));
     await provider.configure({ connectionId: 'missing', buildTarget: target });
     assert.equal(c.requests.length, 0);
-    assert.deepEqual(c.contexts.getSelection(scope, 'run'), {});
+    assert.deepEqual(c.contexts.getSelection(scope), {});
     provider.dispose();
 });
 
@@ -345,33 +345,72 @@ test('without-building actions reject unsupported policies before preparation or
     assert.equal(c.requests.length, 0);
 });
 
-test('shared preferences are inherited while operation overrides stay explicit and defaults remain omitted', async () => {
-    const server = transport(), contexts = new BuildContexts(server.request); contexts.negotiate(accepted());
-    await contexts.setSelection(scope, undefined, { 'provider.mode': 'release' });
-    assert.deepEqual(contexts.getSelection(scope, 'run'), { 'provider.mode': 'release' });
-    assert.deepEqual(contexts.getSelection(scope, 'debug'), { 'provider.mode': 'release' });
-    await contexts.setSelection(scope, 'debug', { 'provider.mode': 'debug' });
-    assert.deepEqual(contexts.getSelection(scope, 'debug'), { 'provider.mode': 'debug' });
-    await contexts.options(scope);
-    assert.equal(Object.hasOwn(server.requests.at(-1).params, 'operation'), false);
-    await contexts.choose(scope, 'provider.mode', undefined, [dimension()], 'debug');
-    assert.deepEqual(contexts.getSelection(scope, 'debug'), {}, 'Automatic override omits the shared value from the wire');
-    assert.deepEqual(contexts.getSelection(scope, 'run'), { 'provider.mode': 'release' });
-    await contexts.reset(scope, 'debug');
-    assert.deepEqual(contexts.getSelection(scope, 'debug'), { 'provider.mode': 'release' });
+test('saved operation overrides cannot affect shared selections or execution', async () => {
+    const workspaceUri = 'file:///workspace', storageKey = 'bsp.contextPreferences.v1:config-A';
+    const shared = { 'xcode.scheme': 'Shared', 'xcode.configuration': 'Debug', 'xcode.destination': 'device' };
+    const saved = {
+        [JSON.stringify([workspaceUri, null, null])]: shared,
+        [JSON.stringify([workspaceUri, [id.uri], null])]: { 'target.runtime': 'shared-runtime' }
+    };
+    for (const operation of ['compile', 'run', 'test', 'debug']) {
+        for (const targets of [null, [id.uri]]) {
+            saved[JSON.stringify([workspaceUri, targets, operation])] = {
+                'xcode.scheme': 'Old', 'xcode.configuration': null, 'xcode.destination': 'old-device', 'target.runtime': 'old-runtime'
+            };
+        }
+    }
+    const data = new Map([[storageKey, saved]]), requests = [];
+    const contexts = new BuildContexts(async (method, params) => {
+        requests.push({ method, params });
+        if (method !== 'workspace/contextOptions') { return resolved(params); }
+        const values = { ...shared, ...(params.scope.targets ? { 'target.runtime': 'shared-runtime' } : {}) };
+        return { selection: params.selection, dimensions: Object.entries(values).map(([id, value]) => ({
+            id, label: id, kind: 'enum', required: false, options: [{ id: value, label: value }]
+        })) };
+    });
+    contexts.attachPreferences({ get: key => data.get(key), update: async (key, value) => data.set(key, structuredClone(value)) },
+        'config-A', workspaceUri);
+    contexts.negotiate(accepted(undefined, ['build', 'reuse']));
+    assert.deepEqual(contexts.getSelection({}), shared);
+    assert.deepEqual(contexts.getSelection(scope), { 'target.runtime': 'shared-runtime' });
+    for (const operation of contexts.operations) {
+        for (const currentScope of [{}, scope]) {
+            for (const policy of operation === 'compile' ? ['build'] : ['build', 'reuse']) {
+                const result = await contexts.resolve(currentScope, operation, CancellationToken.None, policy);
+                assert.deepEqual(result.selection, { ...shared, ...(currentScope.targets ? { 'target.runtime': 'shared-runtime' } : {}) });
+                assert.equal(result.operation, operation);
+                assert.equal(result.buildPolicy ?? 'build', policy);
+            }
+        }
+    }
+    assert.ok(requests.filter(request => request.method === 'workspace/contextOptions')
+        .every(request => !Object.hasOwn(request.params, 'operation')));
+    await contexts.setSelection({}, shared);
+    assert.ok(Object.keys(data.get(storageKey)).every(key => JSON.parse(key)[2] === null), 'Saving removes legacy operation records');
 });
 
-test('changing shared choices retains compatible operation overrides and removes obsolete fields', async () => {
+test('legacy operation selections do not replace Automatic defaults', async () => {
+    const server = transport(), contexts = new BuildContexts(server.request);
+    const saved = Object.fromEntries(['compile', 'run', 'test', 'debug'].map(operation => [
+        JSON.stringify(['file:///workspace', null, operation]), { 'provider.mode': 'release' }
+    ]));
+    contexts.attachPreferences({ get: () => saved, update: async () => {} }, 'config-A', 'file:///workspace');
+    contexts.negotiate(accepted());
+    for (const operation of contexts.operations) {
+        assert.deepEqual((await contexts.resolve({}, operation)).selection, {});
+    }
+    assert.deepEqual(contexts.getSelection({}), {});
+});
+
+test('changing shared choices retains compatible selections and removes obsolete fields', async () => {
     const contexts = new BuildContexts(async (_method, params) => dependencyOptions(params.selection));
     contexts.negotiate(accepted());
     const dimensions = dependencyOptions({ group: 'A' }).dimensions;
-    await contexts.setSelection(scope, undefined, { group: 'A', mode: 'release', device: 'one' });
-    await contexts.setSelection(scope, 'debug', { mode: 'debug', device: 'two', extra: 'old-session' });
+    await contexts.setSelection(scope, { group: 'A', mode: 'release', device: 'one', extra: 'old-session' });
     await contexts.choose(scope, 'device', 'two', dimensions);
-    assert.deepEqual(contexts.getSelection(scope, 'debug'), { group: 'A', mode: 'debug', device: 'two' });
+    assert.deepEqual(contexts.getSelection(scope), { group: 'A', mode: 'release', device: 'two' });
     await contexts.choose(scope, 'group', 'B', dimensions);
-    assert.deepEqual(contexts.getSelection(scope, 'debug'), { group: 'B', mode: 'debug', device: 'two' });
-    assert.deepEqual(contexts.getSelection(scope, 'run'), { group: 'B', mode: 'release', device: 'two' });
+    assert.deepEqual(contexts.getSelection(scope), { group: 'B', mode: 'release', device: 'two' });
 });
 
 test('custom server dimensions remain generic and action buttons use scope, server, and target capabilities', async () => {
@@ -384,7 +423,6 @@ test('custom server dimensions remain generic and action buttons use scope, serv
     assert.match(workspace.contextValue, /canRun/);
     const rows = await provider.getChildren(workspace);
     assert.deepEqual(rows.map(item => item.label), ['Optimization Profile']);
-    assert.equal(rows[0].operation, undefined);
     const limited = { ...target, capabilities: { canCompile: true, canTest: true, canRun: false, canDebug: false } };
     picks.push(() => undefined);
     await provider.configure({ connectionId: 'connection-0', buildTarget: limited });
@@ -413,7 +451,6 @@ test('execution prompts for missing shared choices without operation-specific di
     await c.prepareDebugConfiguration(target);
     assert.equal(c.requests.at(-1).method, 'debugSession/start');
     assert.deepEqual(c.contexts.getSelection({}), { 'acme.profile': 'tests' });
-    assert.deepEqual(c.contexts.getSelection({}, 'run'), { 'acme.profile': 'tests' });
     assert.equal(c.requests.find(request => request.method === 'workspace/resolveContext').params.operation, 'debug');
     await c.contexts.reset({}); c.requests.length = 0;
     picks.push(() => undefined);
@@ -428,8 +465,7 @@ test('action buttons choose only the resolve operation and every options request
         assert.equal(Object.hasOwn(params, 'operation'), false);
         return options(params.selection);
     };
-    await c.contexts.setSelection({}, undefined, { 'provider.mode': 'release' });
-    await c.contexts.setSelection({}, 'debug', { 'provider.mode': 'debug' });
+    await c.contexts.setSelection({}, { 'provider.mode': 'release' });
     const root = (await provider.getChildren())[0];
     for (const operation of ['compile', 'run', 'test', 'debug']) {
         c.requests.length = 0;
@@ -437,7 +473,7 @@ test('action buttons choose only the resolve operation and every options request
         const resolutions = c.requests.filter(request => request.method === 'workspace/resolveContext');
         assert.equal(resolutions.length, 1);
         assert.equal(resolutions[0].params.operation, operation);
-        assert.equal(resolutions[0].params.selection['provider.mode'], operation === 'debug' ? 'debug' : 'release');
+        assert.equal(resolutions[0].params.selection['provider.mode'], 'release');
         assert.equal(c.requests.at(-1).method, operation === 'debug' ? 'debugSession/start' : 'buildTarget/' + operation);
         assert.ok(c.requests.filter(request => request.method === 'workspace/contextOptions')
             .every(request => !Object.hasOwn(request.params, 'operation')));
@@ -472,7 +508,6 @@ test('operation defaults returned by resolve never become saved shared choices',
     assert.equal((await contexts.resolve(scope, 'run')).selection['provider.mode'], 'release');
     assert.equal((await contexts.resolve(scope, 'test')).selection['provider.mode'], 'debug');
     assert.deepEqual(contexts.getSelection(scope), {});
-    assert.deepEqual(contexts.getSelection(scope, 'run'), {});
     assert.ok(calls.every(call => Object.keys(call.params.selection).length === 0));
 });
 
@@ -567,7 +602,7 @@ test('selection reuses validated options and refreshes only its scope', async ()
 
 test('a picker focuses the current value without saving focus changes', async () => {
     const c = client(), provider = new BuildContextProvider(manager([c]));
-    await c.contexts.setSelection({}, undefined, { 'provider.mode': 'release' });
+    await c.contexts.setSelection({}, { 'provider.mode': 'release' });
     const root = (await provider.getChildren())[0], row = (await provider.getChildren(root))[0];
     c.requests.length = 0;
     picks.push((items, picker) => {
@@ -601,8 +636,7 @@ test('Automatic clears its field, keeps compatible dependent choices, and resolv
         { ...dimension(), required: false, value: params.selection['provider.mode'] },
         { ...dimension(), id: 'provider.device', label: 'Device', required: false, value: params.selection['provider.device'] }
     ] });
-    await c.contexts.setSelection({}, undefined, { 'provider.mode': 'release', 'provider.device': 'release' });
-    await c.contexts.setSelection({}, 'debug', { 'provider.device': 'debug' });
+    await c.contexts.setSelection({}, { 'provider.mode': 'release', 'provider.device': 'release' });
     const root = (await provider.getChildren())[0];
     picks.push((items, picker) => {
         assert.equal(picker.activeItems[0].option.id, 'release');
@@ -612,7 +646,6 @@ test('Automatic clears its field, keeps compatible dependent choices, and resolv
     });
     await provider.selectDimension((await provider.getChildren(root))[0]);
     assert.deepEqual(c.contexts.getSelection({}), { 'provider.device': 'release' });
-    assert.deepEqual(c.contexts.getSelection({}, 'debug'), { 'provider.device': 'debug' });
     const automatic = (await provider.getChildren(root))[0];
     assert.equal(automatic.description, 'Automatic');
     picks.push((_items, picker) => {
@@ -624,7 +657,7 @@ test('Automatic clears its field, keeps compatible dependent choices, and resolv
     c.connection.sendRequest = async (method, params, token) => {
         const result = await send(method, params, token);
         if (method === 'workspace/resolveContext') {
-            assert.deepEqual(params.selection, { 'provider.device': params.operation === 'debug' ? 'debug' : 'release' });
+            assert.deepEqual(params.selection, { 'provider.device': 'release' });
             return { ...result, selection: { 'provider.mode': params.operation === 'run' ? 'release' : 'debug' } };
         }
         return result;
@@ -635,17 +668,19 @@ test('Automatic clears its field, keeps compatible dependent choices, and resolv
     provider.dispose();
 });
 
-test('operation override snapshots do not replace shared tree choices', async () => {
+test('shared selection updates refresh the tree and apply to every operation', async () => {
     const c = client(), provider = new BuildContextProvider(manager([c]));
-    await c.contexts.setSelection({}, undefined, { 'provider.mode': 'release' });
+    await c.contexts.setSelection({}, { 'provider.mode': 'release' });
     const root = (await provider.getChildren())[0], row = (await provider.getChildren(root))[0];
     const changed = []; provider.onDidChangeTreeData(item => changed.push(item));
     picks.push(items => items.find(item => item.option?.id === 'debug'));
-    await provider.selectDimension(new ContextTreeItem(root.entry, 'debug', row.dimension));
-    assert.deepEqual(changed, []);
-    assert.equal((await provider.getChildren(root))[0].description, 'Release');
-    assert.deepEqual(c.contexts.getSelection({}, 'debug'), { 'provider.mode': 'debug' });
-    assert.deepEqual(c.contexts.getSelection({}), { 'provider.mode': 'release' });
+    await provider.selectDimension(row);
+    assert.deepEqual(changed, [root]);
+    assert.equal((await provider.getChildren(root))[0].description, 'Debug');
+    assert.deepEqual(c.contexts.getSelection({}), { 'provider.mode': 'debug' });
+    for (const operation of c.contexts.operations) {
+        assert.deepEqual((await c.contexts.resolve({}, operation)).selection, { 'provider.mode': 'debug' });
+    }
     provider.dispose();
 });
 
@@ -799,8 +834,8 @@ test('target execution projects only shared workspace fields and preserves the r
         return { selection: params.selection, operations: ['test'], dimensions: [{ ...dimension(), required: false }] };
     });
     contexts.negotiate(accepted());
-    await contexts.setSelection({}, undefined, { 'provider.mode': 'release', 'vendor.workspaceTarget': 'removed-target' });
-    await contexts.setSelection(scope, undefined, { 'provider.mode': 'debug' });
+    await contexts.setSelection({}, { 'provider.mode': 'release', 'vendor.workspaceTarget': 'removed-target' });
+    await contexts.setSelection(scope, { 'provider.mode': 'debug' });
     const result = await contexts.resolve(scope, 'test');
     assert.deepEqual(result.targets, [id]);
     assert.deepEqual(result.selection, { 'provider.mode': 'release' });
@@ -811,13 +846,12 @@ test('target execution projects only shared workspace fields and preserves the r
     assert.deepEqual(automatic.selection, {}, 'Automatic must not revive the old target override');
 });
 
-test('workspace operation preferences remain isolated by operation and connection during target execution', async () => {
+test('workspace preferences apply to all target operations and stay isolated by connection', async () => {
     const a = new BuildContexts(transport().request), b = new BuildContexts(transport().request);
     a.negotiate(accepted()); b.negotiate(accepted());
-    await a.setSelection({}, undefined, { 'provider.mode': 'release' });
-    await a.setSelection({}, 'debug', { 'provider.mode': 'debug' });
+    await a.setSelection({}, { 'provider.mode': 'release' });
     assert.equal((await a.resolve(scope, 'run')).selection['provider.mode'], 'release');
-    assert.equal((await a.resolve(scope, 'debug')).selection['provider.mode'], 'debug');
+    assert.equal((await a.resolve(scope, 'debug')).selection['provider.mode'], 'release');
     assert.deepEqual((await b.resolve(scope, 'run')).selection, {});
 });
 
@@ -831,7 +865,7 @@ test('incompatible shared choices reject target execution instead of using its d
                 reason: incompatible ? 'Release cannot run on this target' : undefined }] }] };
     });
     contexts.negotiate(accepted());
-    await contexts.setSelection({}, undefined, { 'provider.mode': 'release' });
+    await contexts.setSelection({}, { 'provider.mode': 'release' });
     await assert.rejects(contexts.resolve(scope, 'run'), /Release cannot run/);
     assert.ok(calls.every(method => method === 'workspace/contextOptions'));
 });
@@ -842,13 +876,13 @@ test('target-only required choices prompt in the target scope while shared choic
         { ...dimension(), required: false }, ...(params.scope.targets ? [{ ...dimension(), id: 'vendor.targetRuntime',
             label: 'Runtime', value: params.selection['vendor.targetRuntime'] }] : [])
     ] });
-    await c.contexts.setSelection({}, undefined, { 'provider.mode': 'release' });
+    await c.contexts.setSelection({}, { 'provider.mode': 'release' });
     picks.push(items => items.find(item => item.option?.id === 'debug'));
     await c.prepareDebugConfiguration(target);
     const resolvedRequest = c.requests.find(request => request.method === 'workspace/resolveContext');
     assert.deepEqual(resolvedRequest.params.selection, { 'provider.mode': 'release', 'vendor.targetRuntime': 'debug' });
     assert.deepEqual(c.contexts.getSelection({}), { 'provider.mode': 'release' });
-    assert.deepEqual(c.contexts.getSelection(scope, 'debug'), { 'vendor.targetRuntime': 'debug' });
+    assert.deepEqual(c.contexts.getSelection(scope), { 'vendor.targetRuntime': 'debug' });
     assert.equal((await provider.getChildren()).length, 1);
     provider.dispose();
 });
@@ -899,7 +933,7 @@ test('upstream changes preserve compatible choices in dependency order without s
     });
     contexts.negotiate(accepted());
     const original = { group: 'A', mode: 'release', device: 'one' };
-    await contexts.setSelection(scope, undefined, original);
+    await contexts.setSelection(scope, original);
     const dimensions = dependencyOptions(original).dimensions;
     await contexts.choose(scope, 'group', 'B', dimensions);
     assert.deepEqual(requests, [{ group: 'B' }, { group: 'B', mode: 'release' }, { group: 'B', mode: 'release', device: 'one' }]);
@@ -919,10 +953,10 @@ test('unavailable, disabled, and removed dependent choices are cleared without s
     contexts.negotiate(accepted());
     const original = { group: 'A', mode: 'release', device: 'one' };
     const dimensions = dependencyOptions(original).dimensions;
-    await contexts.setSelection(scope, undefined, original);
+    await contexts.setSelection(scope, original);
     await contexts.choose(scope, 'group', 'C', dimensions);
     assert.deepEqual(contexts.getSelection(scope), { group: 'C' });
-    await contexts.setSelection(scope, undefined, original);
+    await contexts.setSelection(scope, original);
     await contexts.choose(scope, 'group', 'D', dimensions);
     assert.deepEqual(contexts.getSelection(scope), { group: 'D' });
 });
@@ -936,13 +970,13 @@ test('Automatic retains compatible downstream values and does not materialize a 
     });
     contexts.negotiate(accepted());
     const original = { group: 'A', mode: 'release', device: 'one' };
-    await contexts.setSelection(scope, undefined, original);
+    await contexts.setSelection(scope, original);
     await contexts.choose(scope, 'mode', undefined, dependencyOptions(original).dimensions);
     assert.deepEqual(requests, [{ group: 'A' }, { group: 'A', device: 'one' }]);
     assert.deepEqual(contexts.getSelection(scope), { group: 'A', device: 'one' });
 });
 
-test('failed or cancelled compatibility validation leaves shared and operation preferences unchanged', async () => {
+test('failed or cancelled compatibility validation leaves shared preferences unchanged', async () => {
     for (const cancelled of [false, true]) {
         const source = new CancellationTokenSource();
         const contexts = new BuildContexts(async (_method, params) => {
@@ -953,27 +987,23 @@ test('failed or cancelled compatibility validation leaves shared and operation p
         });
         contexts.negotiate(accepted());
         const original = { group: 'A', mode: 'release', device: 'one' };
-        await contexts.setSelection(scope, undefined, original);
-        await contexts.setSelection(scope, 'debug', { mode: 'debug', device: 'two' });
-        await assert.rejects(contexts.choose(scope, 'group', 'B', dependencyOptions(original).dimensions, undefined, source.token),
+        await contexts.setSelection(scope, original);
+        await assert.rejects(contexts.choose(scope, 'group', 'B', dependencyOptions(original).dimensions, source.token),
             cancelled ? /cancelled/ : /Discovery failed/);
         assert.deepEqual(contexts.getSelection(scope), original);
-        assert.deepEqual(contexts.getSelection(scope, 'debug'), { group: 'A', mode: 'debug', device: 'two' });
     }
 });
 
-test('capability reduction leaves inactive operation overrides out of shared choice validation', async () => {
+test('shared choices remain editable when the server reduces supported operations', async () => {
     const server = transport(), contexts = new BuildContexts(server.request);
     contexts.negotiate(accepted());
-    await contexts.setSelection(scope, 'debug', { 'provider.mode': 'release' });
+    await contexts.setSelection(scope, { 'provider.mode': 'release' });
     contexts.negotiate(accepted(['compile']));
     await contexts.choose(scope, 'provider.mode', 'debug', [dimension()]);
     assert.deepEqual(contexts.getSelection(scope), { 'provider.mode': 'debug' });
-    assert.deepEqual(contexts.getSelection(scope, 'debug'), { 'provider.mode': 'release' });
     assert.equal(server.requests.length, 1);
     assert.equal(server.requests[0].method, 'workspace/contextOptions');
 });
-
 
 test('reuse requires a valid advertised capability and is reset on negotiation or disconnect', () => {
     const contexts = new BuildContexts(transport().request);
@@ -1023,7 +1053,7 @@ test('reuse run, test, and debug freeze policy at resolution and execute with on
             assert.deepEqual(events.map(event => event.kind), ['started', 'finished']);
             assert.equal(notices.length, noticesBefore, 'Native tests must not show a second result');
         } else if (operation === 'debug') { assert.equal(starts.at(-1).stopOnEntry, false); }
-        assert.deepEqual(c.contexts.getSelection(scope, operation), {}, 'Policies are not saved as preferences');
+        assert.deepEqual(c.contexts.getSelection(scope), {}, 'Policies are not saved as preferences');
         source.dispose();
     }
 });

@@ -463,12 +463,6 @@
         "command": "bsp.contextDebugWithoutBuilding",
         "title": "Debug Without Building with This Context",
         "category": "BSP"
-      },
-      {
-        "command": "bsp.configureOperationContext",
-        "title": "Override Shared Configuration for an Operation",
-        "category": "BSP",
-        "icon": "$(settings-gear)"
       }
     ],
     "views": {
@@ -653,11 +647,6 @@
           "command": "bsp.contextDebugWithoutBuilding",
           "when": "view == bspContexts && viewItem =~ /buildContextScope.*canDebug/ && viewItem =~ /canReuseBuild/",
           "group": "advanced@3"
-        },
-        {
-          "command": "bsp.configureOperationContext",
-          "when": "view == bspContexts && viewItem =~ /buildContextScope/",
-          "group": "configuration@2"
         }
       ]
     }

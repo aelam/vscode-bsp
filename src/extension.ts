@@ -472,7 +472,6 @@ async function initializeBspExtension(context: vscode.ExtensionContext) {
     context.subscriptions.push(contexts, vscode.window.createTreeView('bspContexts', { treeDataProvider: contexts }));
     for (const [command, action] of [
         ['bsp.configureContext', (item: any) => contexts.configure(item)],
-        ['bsp.configureOperationContext', (item: any) => contexts.configure(item, true)],
         ['bsp.selectContextDimension', (item: any) => contexts.selectDimension(item)],
         ['bsp.executeContext', (item: any) => item ? contexts.execute(item) : contexts.configure()],
         ['bsp.contextCompile', (item: any) => contexts.execute(item, 'compile')],

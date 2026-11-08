@@ -14,17 +14,17 @@ function scopeLabel(entry: ScopeEntry): string {
 export class ContextTreeItem extends vscode.TreeItem {
     snapshot?: { options: ContextOptions; preferences: string };
     revision = 0;
-    constructor(public entry: ScopeEntry, readonly operation?: ContextOperation, readonly dimension?: ContextDimension,
+    constructor(public entry: ScopeEntry, readonly dimension?: ContextDimension,
         operations: readonly ContextOperation[] = []) {
         super(dimension?.label ?? scopeLabel(entry),
             dimension ? vscode.TreeItemCollapsibleState.None : vscode.TreeItemCollapsibleState.Expanded);
         this.id = JSON.stringify([entry.connectionId, entry.scope.workspaceUri ?? null,
-            entry.scope.targets?.map(target => target.uri).sort() ?? null, operation ?? null, dimension?.id ?? null]);
+            entry.scope.targets?.map(target => target.uri).sort() ?? null, null, dimension?.id ?? null]);
         this.contextValue = dimension ? dimension.enabled === false ? 'buildContextDimensionDisabled' : 'buildContextDimension'
             : ['buildContextScope', ...operations.map(op => `can${op[0].toUpperCase()}${op.slice(1)}`)].join(' ');
         this.iconPath = new vscode.ThemeIcon(dimension ? 'list-selection' : 'settings-gear');
         if (dimension) {
-            const explicit = entry.client.contexts.getSelection(entry.scope, operation)[dimension.id];
+            const explicit = entry.client.contexts.getSelection(entry.scope)[dimension.id];
             const selected = dimension.options.find(option => option.id === (explicit ?? (dimension.required ? dimension.value : undefined)));
             this.description = dimension.enabled === false ? dimension.reason ?? 'Unavailable'
                 : selected?.label ?? (dimension.required ? 'Not selected' : 'Automatic');
@@ -88,7 +88,7 @@ export class BuildContextProvider implements vscode.TreeDataProvider<ContextTree
         if (item.dimension || !item.entry.client.connected) { return []; }
         try {
             const result = await this.loadScope(item);
-            return result.dimensions.map(dimension => new ContextTreeItem(item.entry, undefined,
+            return result.dimensions.map(dimension => new ContextTreeItem(item.entry,
                 { ...dimension, value: dimension.value ?? result.selection[dimension.id] }));
         } catch (error) {
             void vscode.window.showErrorMessage(`Cannot load build configuration: ${String(error)}`);
@@ -96,41 +96,33 @@ export class BuildContextProvider implements vscode.TreeDataProvider<ContextTree
         }
     }
 
-    async configure(item?: { connectionId?: string; buildTarget?: BuildTarget } | ContextTreeItem,
-        overrides = false): Promise<void> {
+    async configure(item?: { connectionId?: string; buildTarget?: BuildTarget } | ContextTreeItem): Promise<void> {
         const entry = await this.entryFor(item);
         if (!entry) { return; }
-        let operation: ContextOperation | undefined;
-        if (overrides) {
-            const shared = await entry.client.contexts.options(entry.scope);
-            operation = (await vscode.window.showQuickPick(this.operations(entry, shared).map(operation => ({ label: operation, operation })),
-                { placeHolder: 'Select an operation to override shared choices' }))?.operation;
-            if (!operation) { return; }
-        }
         let result: ContextOptions | undefined;
         while (entry.client.connected) {
-            try { result ??= await entry.client.contexts.options(entry.scope, operation); }
+            try { result ??= await entry.client.contexts.options(entry.scope); }
             catch (error) {
                 const choice = await vscode.window.showWarningMessage(
                     `Cannot load the saved configuration: ${String(error)}`, 'Reset saved choices');
                 if (choice !== 'Reset saved choices') { return; }
-                await entry.client.contexts.reset(entry.scope, operation); this.refresh(); result = undefined; continue;
+                await entry.client.contexts.reset(entry.scope); this.refresh(); result = undefined; continue;
             }
             const choices = result.dimensions.map(dimension => {
-                const row = new ContextTreeItem(entry, operation,
+                const row = new ContextTreeItem(entry,
                     { ...dimension, value: dimension.value ?? result!.selection[dimension.id] });
                 return { label: dimension.label, description: row.description as string, detail: row.tooltip as string,
                     dimension, action: 'dimension' };
             });
             const selected = await vscode.window.showQuickPick([
                 ...choices, { label: 'Reset saved choices', action: 'reset' }
-            ], { placeHolder: `${scopeLabel(entry)}${operation ? ` · ${operation} overrides` : ' · shared configuration'}` });
+            ], { placeHolder: `${scopeLabel(entry)} · shared configuration` });
             if (!selected) { return; }
             if (selected.action === 'reset') {
-                await entry.client.contexts.reset(entry.scope, operation); this.refresh(); result = undefined;
+                await entry.client.contexts.reset(entry.scope); this.refresh(); result = undefined;
             }
             else if ('dimension' in selected) {
-                await this.selectDimension(new ContextTreeItem(entry, operation, selected.dimension),
+                await this.selectDimension(new ContextTreeItem(entry, selected.dimension),
                     CancellationToken.None, false, options => { result = options; });
             }
         }
@@ -138,9 +130,9 @@ export class BuildContextProvider implements vscode.TreeDataProvider<ContextTree
 
     async selectDimension(item: ContextTreeItem, token = CancellationToken.None, requireChoice = false,
         onChanged?: (options: ContextOptions) => void): Promise<boolean> {
-        const { entry, operation, dimension } = item;
+        const { entry, dimension } = item;
         if (!dimension || dimension.enabled === false) { return false; }
-        const current = await entry.client.contexts.options(entry.scope, operation, undefined, token);
+        const current = await entry.client.contexts.options(entry.scope, undefined, token);
         const fresh = current.dimensions.find(candidate => candidate.id === dimension.id);
         if (!fresh) { this.refresh(); return false; }
         if (fresh.enabled === false) { this.refresh(); return false; }
@@ -161,7 +153,7 @@ export class BuildContextProvider implements vscode.TreeDataProvider<ContextTree
                 return { ...presentation, iconPath: icon ? new vscode.ThemeIcon(icon) : undefined, option };
             }));
         }
-        const explicit = entry.client.contexts.getSelection(entry.scope, operation)[fresh.id];
+        const explicit = entry.client.contexts.getSelection(entry.scope)[fresh.id];
         const selected = explicit ?? (fresh.required ? current.selection[fresh.id] ?? fresh.value : undefined);
         const active = choices.find(choice => choice.kind !== vscode.QuickPickItemKind.Separator
             && choice.option?.id === selected);
@@ -170,15 +162,13 @@ export class BuildContextProvider implements vscode.TreeDataProvider<ContextTree
         if (chosen.option?.availability === false) {
             void vscode.window.showInformationMessage(chosen.option.reason ?? 'This option is unavailable'); return false;
         }
-        const result = await entry.client.contexts.choose(entry.scope, fresh.id, chosen.option?.id, current.dimensions, operation, token);
+        const result = await entry.client.contexts.choose(entry.scope, fresh.id, chosen.option?.id, current.dimensions, token);
         onChanged?.(result);
-        if (!operation) {
-            const root = this.scopeItems.get(this.scopeKey(entry));
-            if (root?.entry.client === entry.client) {
-                root.revision++;
-                this.updateScope(root, result, this.preferenceKey(entry));
-                this.changes.fire(root);
-            }
+        const root = this.scopeItems.get(this.scopeKey(entry));
+        if (root?.entry.client === entry.client) {
+            root.revision++;
+            this.updateScope(root, result, this.preferenceKey(entry));
+            this.changes.fire(root);
         }
         return true;
     }
@@ -278,10 +268,7 @@ export class BuildContextProvider implements vscode.TreeDataProvider<ContextTree
             if (!missing) { return true; }
             const shared = sharedDimensions.includes(missing.id);
             const promptScope = shared ? sharedScope : entry.scope;
-            const promptOperation = shared && entry.client.contexts.getSelection(sharedScope)[missing.id] === undefined
-                ? undefined : operation;
-            if (!await this.selectDimension(new ContextTreeItem({ ...entry, scope: promptScope }, promptOperation,
-                missing), token, true)) { return false; }
+            if (!await this.selectDimension(new ContextTreeItem({ ...entry, scope: promptScope }, missing), token, true)) { return false; }
         }
         return false;
     }
