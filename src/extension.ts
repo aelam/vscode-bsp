@@ -10,7 +10,6 @@ import { BuildTargetProvider } from './buildTargetProvider';
 import { BspConnectionManager } from './bspConnectionManager';
 import { MultiBspProvider } from './multiBspProvider';
 import { BspDebugConfigurationProvider, BspDebugAdapterDescriptorFactory } from './debugProvider';
-import { BuildSystemManager } from './buildSystemManager';
 import { revealBuildOutput } from './outputPaths';
 import { cleanBuildCache } from './cleanCache';
 import { initializeBuildLogger, initializeLogger, showBuildOutput, log, logError, logInfo } from './logger';
@@ -442,19 +441,9 @@ async function initializeBspExtension(context: vscode.ExtensionContext) {
     updateConnectionContext();
     logInfo('BSP context enabled');
 
-    // Initialize build system manager and connection manager
-    const buildSystemManager = new BuildSystemManager(context);
-    
-    // Create connection manager with build system manager
-    const tempConnectionManager = new BspConnectionManager();
-    multiBspProvider = new MultiBspProvider(tempConnectionManager, context, buildSystemManager);
-    
-    // Now create the real connection manager with the shared build system manager
-    connectionManager = new BspConnectionManager(buildSystemManager, context.workspaceState);
+    connectionManager = new BspConnectionManager(context.workspaceState);
     context.subscriptions.push(connectionManager.onDidChangeConnections(() => updateConnectionContext()));
-    
-    // Replace the multiBspProvider with the correct connection manager, reusing the build system manager
-    multiBspProvider = new MultiBspProvider(connectionManager, context, buildSystemManager);
+    multiBspProvider = new MultiBspProvider(connectionManager, context);
 
     // Register multi-BSP tree data provider
     const multiBspTreeView = vscode.window.createTreeView('bspTargets', {
@@ -464,10 +453,7 @@ async function initializeBspExtension(context: vscode.ExtensionContext) {
     logInfo('Multi-BSP tree view registered');
 
     // Initialize single BSP client for backward compatibility
-    logInfo(`🔧 Getting BuildSystemManager for BspClient: ${buildSystemManager ? 'available' : 'unavailable'}`);
-    logInfo(`🔧 BuildSystemManager type: ${typeof buildSystemManager}`);
-    logInfo(`🔧 BuildSystemManager instance: ${buildSystemManager?.constructor?.name}`);
-    bspClient = new BspClient(workspaceFolders[0].uri, undefined, undefined, buildSystemManager, context.workspaceState);
+    bspClient = new BspClient(workspaceFolders[0].uri, undefined, undefined, context.workspaceState);
     const contexts = new BuildContextProvider(connectionManager, bspClient);
     context.subscriptions.push(contexts, vscode.window.createTreeView('bspContexts', { treeDataProvider: contexts }));
     for (const [command, action] of [
@@ -854,23 +840,6 @@ async function initializeBspExtension(context: vscode.ExtensionContext) {
         // This command is disabled and should not be executable
     });
 
-    // Build system commands
-    const handleDynamicSelectorCommand = vscode.commands.registerCommand('bsp.handleDynamicSelector', async (treeItem) => {
-        if (!treeItem || !treeItem.buildTarget || !treeItem.selectorConfig || !multiBspProvider) {
-            logError('Invalid tree item for dynamic selector');
-            return;
-        }
-        
-        logInfo(`handleDynamicSelector command triggered for ${treeItem.selectorConfig.keyName}`);
-        
-        const client = treeItem.connectionId
-            ? connectionManager?.getConnection(treeItem.connectionId)?.client : bspClient;
-        const isBusy = () => !!client?.operations.get(treeItem.buildTarget.id.uri);
-        if (isBusy()) { return; }
-        const buildSystemMgr = multiBspProvider.getBuildSystemManager();
-        await buildSystemMgr.showDynamicSelector(treeItem.buildTarget, treeItem.selectorConfig, () => !isBusy());
-    });
-
     // Favorites management commands
     const addToFavoritesCommand = vscode.commands.registerCommand('bsp.addToFavorites', async (item) => {
         if (!multiBspProvider || !item?.buildTarget) return;
@@ -932,7 +901,6 @@ async function initializeBspExtension(context: vscode.ExtensionContext) {
         testDisabledCommand,
         runDisabledCommand,
         debugDisabledCommand,
-        handleDynamicSelectorCommand,
         addToFavoritesCommand,
         removeFromFavoritesCommand,
         reconnectFavoriteCommand

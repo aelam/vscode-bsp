@@ -103,7 +103,7 @@ export class BspClient {
 
 
     constructor(workspaceUri: vscode.Uri, private configPath?: string, onTargetsUpdated?: () => void,
-        private buildSystemManager?: any, preferences?: ContextPreferenceStorage) {
+        preferences?: ContextPreferenceStorage) {
         this.workspaceUri = workspaceUri;
         const root = workspaceUri.toString();
         this.contexts.attachPreferences(preferences, JSON.stringify([root, configPath ?? null]), root);
@@ -111,11 +111,6 @@ export class BspClient {
         this.diagnosticsCollection = vscode.languages.createDiagnosticCollection('bsp');
         this.onTargetsUpdated = onTargetsUpdated;
         
-        // Debug: Check BuildSystemManager instance
-        if (this.buildSystemManager) {
-            log(`🔧 BspClient: BuildSystemManager instance ID: ${this.buildSystemManager.instanceId || 'no-id'}`);
-            log(`🔧 BspClient: BuildSystemManager debug info: ${JSON.stringify(this.buildSystemManager.getDebugInfo(), null, 2)}`);
-        }
     }
 
     async connect(): Promise<void> {
@@ -289,29 +284,10 @@ export class BspClient {
                 throw new Error('BSP client not connected');
             }
 
-            let compileArgs: string[] = [];
-            
-            // Get compile arguments from BuildSystemManager (if available)
-            if (this.buildSystemManager && this.buildSystemManager.canHandle(target)) {
-                log(`🔧 Using BuildSystemManager for target: ${targetId}`);
-                
-                try {
-                    compileArgs = await this.buildSystemManager.getCompileArguments(target);
-                    log(`🔧 Generated compile arguments: [${compileArgs.join(', ')}]`);
-                } catch (error) {
-                    logError('Failed to get compile arguments from BuildSystemManager', error);
-                }
-            } else if (this.buildSystemManager) {
-                log(`⚠️ Target ${targetId} is not supported by BuildSystemManager`);
-                log(`⚠️ Target dataKind: ${target.dataKind}, data.xcode: ${!!target.data?.xcode}`);
-            } else {
-                log(`⚠️ BuildSystemManager not available`);
-            }
-
             const params: CompileParams = {
                 targets: [{ uri: targetId }],
                 originId,
-                arguments: compileArgs
+                arguments: []
             };
 
             if (cancellation.isCancellationRequested) { throw new Error('Build cancelled'); }
@@ -340,15 +316,11 @@ export class BspClient {
             let failure: string | undefined;
             try {
                 if (!this.connection) { throw new Error('BSP client not connected'); }
-                let testArgs: string[] = [];
-                if (this.buildSystemManager && this.buildSystemManager.canHandle(target)) {
-                    testArgs = await this.buildSystemManager.getTestArguments(target);
-                }
                 if (cancellation.isCancellationRequested) {
                     status = StatusCode.Cancelled;
                     return { statusCode: status, originId };
                 }
-                const params: TestParams = { targets: [target.id], originId, arguments: testArgs, ...options.selection };
+                const params: TestParams = { targets: [target.id], originId, arguments: [], ...options.selection };
                 log(`Starting tests for ${target.displayName || targetId}`);
                 const result: TestResult = await this.connection.sendRequest('buildTarget/test', params, cancellation);
                 status = result.statusCode;
@@ -407,22 +379,10 @@ export class BspClient {
 
             await this.stopPreviousDebugSession(targetId);
             if (cancellation.isCancellationRequested) { throw new Error('Run cancelled'); }
-            let runArgs: string[] = [];
-            
-            // Get run arguments from BuildSystemManager (if available)
-            if (this.buildSystemManager && this.buildSystemManager.canHandle(target)) {
-                try {
-                    runArgs = await this.buildSystemManager.getRunArguments(target);
-                    log(`🔧 Generated run arguments: [${runArgs.join(', ')}]`);
-                } catch (error) {
-                    logError('Failed to get run arguments from BuildSystemManager', error);
-                }
-            }
-
             const params: RunParams = {
                 target: { uri: targetId },
                 originId,
-                arguments: runArgs
+                arguments: []
             };
 
             if (cancellation.isCancellationRequested) { throw new Error('Run cancelled'); }
@@ -451,7 +411,7 @@ export class BspClient {
             if (testing && (!target.capabilities.canTest || !target.capabilities.canDebug)) {
                 throw new Error('This build target does not support test debugging');
             }
-            const result = await this.requestDebugSession(target, originId, cancellation, testing);
+            const result = await this.requestDebugSession(target, originId, cancellation);
             if (cancellation.isCancellationRequested) { throw new Error('Debug cancelled'); }
             this.operations.get(target.id.uri)?.report('Connecting debugger');
             const configuration = this.configurationForDebugResult(result, target.id.uri);
@@ -474,7 +434,7 @@ export class BspClient {
         }
         return this.executeWithProgress('debug', target.id.uri, async (originId, cancellation) => {
             const testing = target.capabilities?.canTest === true && !target.capabilities.canRun;
-            const result = await this.requestDebugSession(target, originId, cancellation, testing);
+            const result = await this.requestDebugSession(target, originId, cancellation);
             if (cancellation.isCancellationRequested) { throw new Error('Debug cancelled'); }
             const configuration = this.configurationForDebugResult(result, target.id.uri);
             if (testing) { configuration.stopOnEntry = false; }
@@ -482,7 +442,7 @@ export class BspClient {
         }, { token });
     }
 
-    private async requestDebugSession(target: BuildTarget, originId: string, token: CancellationToken, testing = false): Promise<DebugSessionAddressResult> {
+    private async requestDebugSession(target: BuildTarget, originId: string, token: CancellationToken): Promise<DebugSessionAddressResult> {
         const targetId = target.id.uri;
         
         if (!this.connection) {
@@ -491,24 +451,10 @@ export class BspClient {
 
         await this.stopPreviousDebugSession(targetId);
 
-        // Use the selected arguments for the operation being debugged.
-        let debugArgs: string[] = [];
-        if (this.buildSystemManager && this.buildSystemManager.canHandle(target)) {
-            try {
-                debugArgs = testing
-                    ? await this.buildSystemManager.getTestArguments(target)
-                    : await this.buildSystemManager.getRunArguments(target);
-                log(`🔧 Generated debug arguments: [${debugArgs.join(', ')}]`);
-            } catch (error) {
-                logError('Failed to get debug arguments from BuildSystemManager', error);
-                if (testing) { throw error; }
-            }
-        }
-
         const params: DebugSessionParams = {
             targets: [{ uri: targetId }],
             originId,
-            arguments: debugArgs
+            arguments: []
         };
         if (token.isCancellationRequested) { throw new Error('Debug cancelled'); }
         try {

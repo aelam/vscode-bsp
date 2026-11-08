@@ -132,7 +132,7 @@ test('debug stays locked while VS Code connects and repeated F5 returns without 
 
 test('normal and favorite rows share busy state while other connections remain enabled', async () => {
     const a=client(), b=client(), m=manager([a,b]);
-    const provider=new MultiBspProvider(m,undefined,{onDidChangeConfiguration:()=>({dispose(){}}),canHandle:()=>false});
+    const provider=new MultiBspProvider(m);
     const make=(connectionId,favorite=false)=>{ const item=new BspTreeItem('App',1,'buildTarget'); item.connectionId=connectionId; item.buildTarget=target(); item.contextValue='buildTarget'+(favorite?' favorite':''); return item; };
     const row=make('server-0'),favorite=make('server-0',true),other=make('server-1');
     let changes=0;provider.onDidChangeTreeData(()=>changes++);
@@ -230,7 +230,7 @@ test('clean rejects work on another target, including cancelled requests that ha
 
 test('background indexing hides Clean for all targets and restores it only when the root task ends', async () => {
     const c = client(), m = manager([c]);
-    const provider = new MultiBspProvider(m, undefined, { onDidChangeConfiguration: () => ({ dispose() {} }), canHandle: () => false });
+    const provider = new MultiBspProvider(m);
     const item = new BspTreeItem('App', 1, 'buildTarget');
     item.connectionId = 'server-0'; item.buildTarget = target(); item.contextValue = 'buildTarget favorite';
     let updates = 0; provider.onDidChangeTreeData(() => updates++);
@@ -319,7 +319,7 @@ test('disconnect and a late clean response cannot release a new exclusive operat
 
 test('clean state appears on normal and favorite rows with no cancel action', async () => {
     const c = client(), other = client(), m = manager([c, other]);
-    const provider = new MultiBspProvider(m, undefined, { onDidChangeConfiguration: () => ({ dispose() {} }), canHandle: () => false });
+    const provider = new MultiBspProvider(m);
     const make = (server, favorite) => {
         const item = new BspTreeItem('Tests', 1, 'buildTarget');
         item.connectionId = server; item.buildTarget = target('tests'); item.contextValue = 'buildTarget' + (favorite ? ' favorite' : '');
@@ -343,46 +343,31 @@ test('clean state appears on normal and favorite rows with no cancel action', as
     assert.match(provider.getTreeItem(make('server-0', true)).contextValue, /canCleanCache/);
 });
 
-test('expanded context targets omit configuration entries and preserve legacy selectors', async () => {
-    const contextual = client(), legacy = client();
+test('target details show dependencies and languages without retired selectors', async () => {
+    const contextual = client(), standard = client();
     contextual.contexts.negotiate({ bspExtensions: { 'vscode-bsp.build-context': {
         version: '0.1', required: true, operations: ['compile', 'run', 'test', 'debug']
     } } });
-    let selectorCalls = 0;
-    const buildSystem = {
-        onDidChangeConfiguration: () => ({ dispose() {} }),
-        canHandle: () => true,
-        getBuildSettingsDescription: () => 'Legacy Debug configuration',
-        getManagerForTarget: () => ({ getDynamicSelectors: async () => {
-            selectorCalls++;
-            return { selectors: [{ keyName: 'configuration', displayLabel: 'Configuration: Debug' }] };
-        } })
-    };
-    const provider = new MultiBspProvider(manager([contextual, legacy]), undefined, buildSystem);
-    const row = connectionId => {
+    const provider = new MultiBspProvider(manager([contextual, standard]));
+    for (const connectionId of ['server-0', 'server-1']) {
         const item = new BspTreeItem('App', vscode.TreeItemCollapsibleState.Collapsed, 'buildTarget');
         item.connectionId = connectionId;
-        item.buildTarget = { ...target(), dependencies: [{ uri: 'target://library' }] };
-        return item;
-    };
-    const children = await provider.getChildren(row('server-0'));
-    assert.ok(children.every(item => item.label !== 'Execution Configuration'));
-    assert.ok(children.every(item => item.command?.command !== 'bsp.configureContext'));
-    assert.ok(children.every(item => !['buildConfig', 'customSelector'].includes(item.type)));
-    assert.ok(children.some(item => item.type === 'dependencies'));
-    assert.ok(children.some(item => item.type === 'languages'));
-    assert.equal(selectorCalls, 0);
-    const legacyChildren = await provider.getChildren(row('server-1'));
-    assert.ok(legacyChildren.some(item => item.type === 'buildConfig' && item.label === 'Legacy Debug configuration'));
-    assert.ok(legacyChildren.some(item => item.type === 'customSelector' && item.label === 'Configuration: Debug'));
-    assert.equal(selectorCalls, 1);
+        item.buildTarget = { ...target(), dependencies: [{ uri: 'target://library' }], data: {
+            selectors: [{ keyName: 'Configuration', displayLabel: 'Select Configuration',
+                values: [{ displayName: 'Debug', arguments: ['-configuration', 'Debug'] }] }]
+        } };
+        const children = await provider.getChildren(item);
+        assert.deepEqual(children.map(child => child.type), ['dependencies', 'languages']);
+        assert.doesNotMatch(provider.getTreeItem(item).description, /Debug|Configuration|Generic/);
+    }
+    const { contributes } = require('../package.json');
+    assert.ok(contributes.commands.every(command => command.command !== 'bsp.handleDynamicSelector'));
+    assert.ok(Object.values(contributes.menus).flat().every(item => item.command !== 'bsp.handleDynamicSelector'));
 });
 
 
 test('Without Building menus require reuse support for contexts and retain legacy actions', () => {
-    const c = client(), provider = new MultiBspProvider(manager([c]), undefined, {
-        onDidChangeConfiguration: () => ({ dispose() {} }), canHandle: () => false
-    });
+    const c = client(), provider = new MultiBspProvider(manager([c]));
     c.serverCapabilities.runProvider = { languageIds: ['swift'] };
     c.serverCapabilities.debugProvider = { languageIds: ['swift'] };
     const descriptor = { version: '0.1', required: true, operations: ['run', 'test', 'debug'] };

@@ -133,7 +133,7 @@ for project selection and connection details.
    If needed, run **BSP: Connect BSP Servers** from the Command Palette.
 3. Run **BSP: Show Build Targets** to open **BSP Targets** in Explorer.
    For servers with the configuration extension, use **BSP Contexts**.
-   Other servers keep their existing selectors.
+   Servers without this extension use their default execution settings.
    Use the target's compile, test, run, or debug action, as supported.
    See [Commands](#commands) for the Command Palette entries.
 
@@ -199,8 +199,8 @@ Run `npm run test:protocol` to check progress, cancellation, diagnostics, and ou
 The native VS Code **Testing** panel lists test targets from connected BSP servers.
 Use **Run Tests** to run a target, or run all targets from the panel toolbar.
 The **BSP: Build and Test Target** command also publishes results to this panel.
-Execution settings inherit the workspace Contexts choices,
-or come from the existing BSP Targets selectors when the server does not use contexts.
+Execution settings inherit the workspace Contexts choices. Without the context
+extension, the server uses its default execution settings.
 The Stop button cancels the corresponding BSP request.
 
 Targets that advertise both `canTest` and `canDebug` also offer **Debug Test
@@ -262,7 +262,7 @@ for the optional metadata and payloads.
 
 In **BSP Targets**, click the **Build and Debug Target** icon beside a test target.
 The command is also available as **BSP: Debug Tests** in the Command Palette.
-It uses the target's selected test configuration and destination. The server must
+It uses the Contexts selection when supported, or the server defaults. The server must
 advertise both `canTest` and `canDebug`. The client requests `debugSession/start`
 and connects to the returned DAP endpoint.
 
@@ -409,8 +409,11 @@ settings without making the client interpret Xcode or SwiftPM command arguments.
 | Server support | Client behavior |
 | --- | --- |
 | Standard BSP only | Keep target browsing and the supported standard actions. |
-| Existing selector metadata | Keep the existing selector adapter when the context extension is not enabled. |
 | Build context extension `0.1` | Use server-provided dimensions, validate selections, and send resolved contexts. |
+
+The former private `target.data.selectors` format and its saved choices are no
+longer used. Servers that need configurable execution settings should implement
+the context extension. Test case selectors are unchanged.
 
 ### Protocol contract
 
@@ -426,7 +429,7 @@ The server must acknowledge the same version in `result.data.bspExtensions`, wit
 `required: true` and an `operations` array. The optional `buildPolicies` array
 must contain `"build"` and can include supported alternatives such as `"reuse"`. If absent, only
 `"build"` is supported. No acknowledgement means the client
-uses its existing standard or selector path. Server names do not enable this
+sends standard BSP requests without generated build arguments. Server names do not enable this
 extension.
 
 The client then uses these custom methods:

@@ -1,7 +1,6 @@
 import * as vscode from 'vscode';
 import { BspConnectionManager, BspConnection } from './bspConnectionManager';
 import { BuildTarget, BuildTargetIdentifier } from './bspTypes';
-import { BuildSystemManager } from './buildSystemManager';
 import { logError, logInfo } from './logger';
 
 export class MultiBspProvider implements vscode.TreeDataProvider<BspTreeItem> {
@@ -10,11 +9,9 @@ export class MultiBspProvider implements vscode.TreeDataProvider<BspTreeItem> {
     private favoriteTargets = new Set<string>();
     private context?: vscode.ExtensionContext;
     private targetToConnectionMap = new Map<string, string>(); // targetId -> connectionId
-    private buildSystemManager: BuildSystemManager;
 
-    constructor(private connectionManager: BspConnectionManager, context?: vscode.ExtensionContext, sharedBuildSystemManager?: BuildSystemManager) {
+    constructor(private connectionManager: BspConnectionManager, context?: vscode.ExtensionContext) {
         this.context = context;
-        this.buildSystemManager = sharedBuildSystemManager || new BuildSystemManager(context);
         
         // Listen to connection changes
         this.connectionManager.onDidChangeConnections(() => {
@@ -31,21 +28,12 @@ export class MultiBspProvider implements vscode.TreeDataProvider<BspTreeItem> {
             this.refresh();
         });
         
-        // Listen to build system configuration changes
-        this.buildSystemManager.onDidChangeConfiguration(() => {
-            this.refresh();
-        });
-        
         // Load favorite targets from configuration
         this.loadFavoriteTargets();
     }
 
     refresh(): void {
         this._onDidChangeTreeData.fire();
-    }
-
-    getBuildSystemManager(): BuildSystemManager {
-        return this.buildSystemManager;
     }
 
     private async getFavoriteTargetItems(): Promise<BspTreeItem[]> {
@@ -67,16 +55,6 @@ export class MultiBspProvider implements vscode.TreeDataProvider<BspTreeItem> {
                 
                 if (target) {
                     processedFavorites.add(favoriteId);
-                    
-                    // 检查是否是Xcode项目
-                    const isXcode = this.buildSystemManager.canHandle(target);
-                    if (isXcode) {
-                        logInfo(`🔧 MultiBspProvider: Extracting Xcode data for ${target.id.uri}`);
-                        const extractedData = this.buildSystemManager.extractCustomData(target);
-                        logInfo(`🔧 MultiBspProvider: Extracted data for ${target.id.uri}: ${extractedData ? 'success' : 'failed'}`);
-                    } else {
-                        logInfo(`🔧 MultiBspProvider: Target ${target.id.uri} is not Xcode target`);
-                    }
                     
                     const item = new BspTreeItem(
                         `${target.displayName || target.id.uri} (${connection.config.displayName})`,
@@ -311,8 +289,6 @@ export class MultiBspProvider implements vscode.TreeDataProvider<BspTreeItem> {
                 element.iconPath = new vscode.ThemeIcon('loading~spin');
                 element.tooltip += `\n${operation.message}`;
             }
-        } else if (element.type === 'customSelector') {
-            element.contextValue = operation ? 'dynamicSelector busy' : 'dynamicSelector';
         }
         return element;
     }
@@ -401,14 +377,6 @@ export class MultiBspProvider implements vscode.TreeDataProvider<BspTreeItem> {
             }
             
             return targets.map(target => {
-                // 检查是否是Xcode项目
-                const isXcode = this.buildSystemManager.canHandle(target);
-                if (isXcode) {
-                    logInfo(`🔧 MultiBspProvider getChildren: Extracting Xcode data for ${target.id.uri}`);
-                    const extractedData = this.buildSystemManager.extractCustomData(target);
-                    logInfo(`🔧 MultiBspProvider getChildren: Extracted data for ${target.id.uri}: ${extractedData ? 'success' : 'failed'}`);
-                }
-                
                 const item = new BspTreeItem(
                     target.displayName || target.id.uri,
                     vscode.TreeItemCollapsibleState.Collapsed,
@@ -443,50 +411,6 @@ export class MultiBspProvider implements vscode.TreeDataProvider<BspTreeItem> {
         const children: BspTreeItem[] = [];
 
         // Capabilities are now shown via enabled/disabled buttons, no need to show as children
-
-        // Add build system configuration if supported
-        const usesContexts = element.connectionId && this.connectionManager.getConnection(element.connectionId)?.client.contexts?.enabled;
-        if (!usesContexts && this.buildSystemManager.canHandle(target)) {
-            const buildSettingsDesc = this.buildSystemManager.getBuildSettingsDescription(target);
-            if (buildSettingsDesc) {
-                children.push(new BspTreeItem(
-                    buildSettingsDesc,
-                    vscode.TreeItemCollapsibleState.None,
-                    'buildConfig'
-                ));
-            }
-            
-            const manager = this.buildSystemManager.getManagerForTarget(target);
-            if (manager) {
-                // Get dynamic selectors from manager
-                const selectors = await this.getDynamicSelectors(manager, target);
-                
-                for (const selector of selectors) {
-                    // Choose icon based on selector key
-                    let iconName = 'list-selection';
-                    if (selector.keyName === 'destination' || selector.keyName === 'platform') {
-                        iconName = 'device-mobile';
-                    } else if (selector.keyName === 'configuration' || selector.keyName === 'buildVariant') {
-                        iconName = 'tools';
-                    }
-                    
-                    const selectorItem = new BspTreeItem(
-                        selector.displayLabel,
-                        vscode.TreeItemCollapsibleState.None,
-                        'customSelector'
-                    );
-                    selectorItem.buildTarget = target;
-                    selectorItem.connectionId = element.connectionId;
-                    selectorItem.iconPath = new vscode.ThemeIcon(iconName);
-                    selectorItem.contextValue = 'dynamicSelector';
-                    
-                    // Store selector configuration for later use
-                    (selectorItem as any).selectorConfig = selector;
-                    
-                    children.push(selectorItem);
-                }
-            }
-        }
 
         // Add dependencies (expandable: lists the individual dependency targets)
         if (target.dependencies.length > 0) {
@@ -599,21 +523,6 @@ export class MultiBspProvider implements vscode.TreeDataProvider<BspTreeItem> {
     private getBuildTargetDescription(target: BuildTarget): string {
         const parts = [];
         
-        // Add build system configuration if available
-        if (this.buildSystemManager.canHandle(target)) {
-            const configDesc = this.buildSystemManager.getBuildSettingsDescription(target);
-            if (configDesc) {
-                parts.push(`[${configDesc}]`);
-            } else {
-                // Get manager type for generic label
-                const manager = this.buildSystemManager.getManagerForTarget(target);
-                if (manager) {
-                    const managerType = manager.constructor.name.replace('TargetManager', '');
-                    parts.push(`[${managerType}]`);
-                }
-            }
-        }
-        
         if (target.tags.length > 0) {
             parts.push(`[${target.tags.join(', ')}]`);
         }
@@ -623,20 +532,6 @@ export class MultiBspProvider implements vscode.TreeDataProvider<BspTreeItem> {
         }
 
         return parts.join(' ');
-    }
-
-    private async getDynamicSelectors(manager: any, target: BuildTarget): Promise<any[]> {
-        if (!manager.getDynamicSelectors) {
-            return [];
-        }
-
-        try {
-            const dynamicResponse = await manager.getDynamicSelectors(target.id.uri);
-            return dynamicResponse?.selectors || [];
-        } catch (error) {
-            logError('Failed to get dynamic selectors', error);
-            return [];
-        }
     }
 
     private getBuildTargetTooltip(target: BuildTarget, serverName?: string): string {
@@ -729,17 +624,12 @@ export class BspTreeItem extends vscode.TreeItem {
     constructor(
         label: string,
         collapsibleState: vscode.TreeItemCollapsibleState,
-        public readonly type: 'connection' | 'buildTarget' | 'capability' | 'dependencies' | 'dependency' | 'languages' | 'status' | 'error' | 'buildConfig' | 'customSelector' | 'favoritesGroup'
+        public readonly type: 'connection' | 'buildTarget' | 'capability' | 'dependencies' | 'dependency' | 'languages' | 'status' | 'error' | 'favoritesGroup'
     ) {
         super(label, collapsibleState);
         
         // Set icons and context values for different item types
-        if (type === 'buildConfig') {
-            this.iconPath = new vscode.ThemeIcon('settings-gear');
-        } else if (type === 'customSelector') {
-            this.iconPath = new vscode.ThemeIcon('list-selection');
-            this.contextValue = 'customSelector';
-        } else if (type === 'favoritesGroup') {
+        if (type === 'favoritesGroup') {
             this.iconPath = new vscode.ThemeIcon('star');
         }
     }

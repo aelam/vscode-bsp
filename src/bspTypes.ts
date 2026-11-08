@@ -19,13 +19,6 @@ export interface BuildTarget {
     data?: any;
 }
 
-// Generic build system data structure that can be used by any build system
-export interface BuildSystemData {
-    selectors: SelectorConfiguration[]; // Direct support for server data structure
-    selectedValues: { [selectorKey: string]: SelectorOption }; // Store selected values by selector key
-}
-
-
 export interface BuildTargetCapabilities {
     canCompile: boolean;
     canTest: boolean;
@@ -246,23 +239,6 @@ export interface Location {
     range: Range;
 }
 
-// Dynamic Selector Types
-export interface SelectorOption {
-    displayName: string;
-    description?: string;
-    arguments: string[];
-    metadata?: any; // For additional data like device ID
-}
-
-export interface SelectorConfiguration {
-    keyName: string;
-    displayLabel: string;
-    values: SelectorOption[];
-}
-
-export interface DynamicSelectorResponse {
-    selectors: SelectorConfiguration[];
-}
 export interface TaskIdentifier { id: string; parents?: string[] }
 export interface TaskStartParams {
     taskId: TaskIdentifier | string;

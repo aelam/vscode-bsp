@@ -361,12 +361,6 @@
         "enablement": "false"
       },
       {
-        "command": "bsp.handleDynamicSelector",
-        "title": "Handle Dynamic Selector",
-        "category": "BSP",
-        "icon": "$(list-selection)"
-      },
-      {
         "command": "bsp.addToFavorites",
         "title": "Add to Favorites",
         "category": "BSP",
@@ -581,11 +575,6 @@
         {
           "command": "bsp.disconnectServer",
           "when": "view == bspTargets && viewItem == connectedBspServer",
-          "group": "inline"
-        },
-        {
-          "command": "bsp.handleDynamicSelector",
-          "when": "view == bspTargets && viewItem == dynamicSelector",
           "group": "inline"
         },
         {

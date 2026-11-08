@@ -150,11 +150,7 @@ try {
     ({ BuildContextProvider, ContextTreeItem } = require('../out/buildContextProvider'));
 } finally { Module._load = load; }
 function client(enabled = true) {
-    const c = new BspClient({ fsPath: '/workspace', toString: () => 'file:///workspace' }, '/workspace/.bsp/server.json', undefined, {
-        getDebugInfo: () => ({}), canHandle: () => true,
-        getCompileArguments: async () => ['legacy-compile'], getRunArguments: async () => ['legacy-run'],
-        getTestArguments: async () => ['legacy-test']
-    });
+    const c = new BspClient({ fsPath: '/workspace', toString: () => 'file:///workspace' }, '/workspace/.bsp/server.json');
     c.isConnected = true; c.buildTargets = [target];
     c.serverCapabilities = Object.fromEntries(['compile', 'run', 'test', 'debug'].map(op => [op + 'Provider', { languageIds: ['swift'] }]));
     c.requests = [];
@@ -188,11 +184,36 @@ test('real client initialization offers the extension and keeps old servers on s
             assert.deepEqual(compile.params.executionContext, { id: 'context-compile' });
             assert.equal(compile.params.arguments, undefined);
         } else {
-            assert.deepEqual(compile.params.arguments, ['legacy-compile']);
+            assert.deepEqual(compile.params.arguments, []);
             assert.equal(compile.params.executionContext, undefined);
             assert.equal(c.requests.length, 2);
         }
     }
+});
+
+test('standard target actions ignore retired selectors and preserve test selections', async () => {
+    const c = client(false);
+    const selected = { ...target, dataKind: 'sourceKit', data: {
+        selectors: [{ keyName: 'Configuration', values: [{ displayName: 'Release', arguments: ['-configuration', 'Release'] }] }],
+        selectedValues: { Configuration: { arguments: ['-configuration', 'Release'] } }
+    } };
+    const selection = { dataKind: 'test-cases', data: { ids: ['case-1'] } };
+    for (const operation of ['compile', 'run', 'test', 'debug']) {
+        c.requests.length = 0;
+        if (operation === 'test') { await c.test(selected, { native: true, selection }); }
+        else if (operation === 'debug') { await c.prepareDebugConfiguration(selected); }
+        else { await c[operation](selected); }
+        assert.equal(c.requests.length, 1);
+        const { method, params } = c.requests[0];
+        assert.equal(method, operation === 'debug' ? 'debugSession/start' : `buildTarget/${operation}`);
+        assert.deepEqual(params.arguments, []);
+        assert.equal(params.executionContext, undefined);
+        if (operation === 'test') {
+            assert.equal(params.dataKind, selection.dataKind);
+            assert.deepEqual(params.data, selection.data);
+        }
+    }
+    c.debugSessions.dispose();
 });
 
 test('target actions, native test selections, and F5 send the operation context without legacy flags', async () => {
