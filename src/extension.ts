@@ -450,7 +450,8 @@ async function initializeBspExtension(context: vscode.ExtensionContext) {
 
     // Register multi-BSP tree data provider
     const multiBspTreeView = vscode.window.createTreeView('bspTargets', {
-        treeDataProvider: multiBspProvider
+        treeDataProvider: multiBspProvider,
+        showCollapseAll: true
     });
     context.subscriptions.push(multiBspTreeView);
     logInfo('Multi-BSP tree view registered');

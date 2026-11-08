@@ -409,7 +409,7 @@
       },
       {
         "command": "bsp.executeContext",
-        "title": "Execute with This Context",
+        "title": "Execute",
         "category": "BSP",
         "icon": "$(play)"
       },
@@ -421,41 +421,41 @@
       },
       {
         "command": "bsp.contextCompile",
-        "title": "Compile with This Context",
+        "title": "Compile",
         "category": "BSP",
         "icon": "$(rocket)"
       },
       {
         "command": "bsp.contextRun",
-        "title": "Run with This Context",
+        "title": "Run",
         "category": "BSP",
         "icon": "$(triangle-right)"
       },
       {
         "command": "bsp.contextTest",
-        "title": "Test with This Context",
+        "title": "Test",
         "category": "BSP",
         "icon": "$(check-all)"
       },
       {
         "command": "bsp.contextDebug",
-        "title": "Debug with This Context",
+        "title": "Debug",
         "category": "BSP",
         "icon": "$(debug-alt)"
       },
       {
         "command": "bsp.contextRunWithoutBuilding",
-        "title": "Run Without Building with This Context",
+        "title": "Run Without Building",
         "category": "BSP"
       },
       {
         "command": "bsp.contextTestWithoutBuilding",
-        "title": "Test Without Building with This Context",
+        "title": "Test Without Building",
         "category": "BSP"
       },
       {
         "command": "bsp.contextDebugWithoutBuilding",
-        "title": "Debug Without Building with This Context",
+        "title": "Debug Without Building",
         "category": "BSP"
       }
     ],
