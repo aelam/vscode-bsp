@@ -43,6 +43,8 @@ export class BuildContexts {
     private reuseBuild = false;
     private available: ContextOperation[] = [];
     private preferences = new Map<string, ContextSelection>();
+    private recents = new Map<string, string[]>();
+    private recentStorageKey?: string;
     private storage?: ContextPreferenceStorage;
     private storageKey?: string;
     private workspaceUri?: string;
@@ -52,6 +54,14 @@ export class BuildContexts {
     attachPreferences(storage: ContextPreferenceStorage | undefined, identity: string, workspaceUri: string): void {
         this.storage = storage;
         this.storageKey = `bsp.contextPreferences.v1:${identity}`;
+        this.recentStorageKey = `bsp.contextRecents.v1:${identity}`;
+        this.recents.clear();
+        const recent = object(storage?.get(this.recentStorageKey));
+        for (const [key, values] of Object.entries(recent ?? {})) {
+            if (Array.isArray(values) && values.every(value => typeof value === 'string')) {
+                this.recents.set(key, [...new Set(values as string[])].slice(0, 5));
+            }
+        }
         this.workspaceUri = workspaceUri;
         const saved = object(storage?.get(this.storageKey));
         if (saved) {
@@ -65,6 +75,18 @@ export class BuildContexts {
                         .filter((entry): entry is [string, string] => typeof entry[1] === 'string')));
                 }
             }
+        }
+    }
+
+    recentOptions(scope: ContextScope, dimension: string): readonly string[] {
+        return this.recents.get(JSON.stringify([this.key(scope), dimension])) ?? [];
+    }
+
+    async rememberOption(scope: ContextScope, dimension: string, option: string): Promise<void> {
+        const key = JSON.stringify([this.key(scope), dimension]);
+        this.recents.set(key, [option, ...this.recentOptions(scope, dimension).filter(value => value !== option)].slice(0, 5));
+        if (this.storage && this.recentStorageKey) {
+            await this.storage.update(this.recentStorageKey, Object.fromEntries(this.recents));
         }
     }
 

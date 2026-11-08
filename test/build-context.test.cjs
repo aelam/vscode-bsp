@@ -109,7 +109,7 @@ class Emitter {
 const notices = [], picks = [], starts = [], quickPicks = [];
 const disposable = () => ({ dispose() {} });
 const vscode = {
-    EventEmitter: Emitter,
+    EventEmitter: Emitter, ThemeColor: class { constructor(id) { this.id = id; } },
     TreeItem: class { constructor(label, collapsibleState) { this.label = label; this.collapsibleState = collapsibleState; } },
     TreeItemCollapsibleState: { None: 0, Collapsed: 1, Expanded: 2 }, ThemeIcon: class { constructor(id) { this.id = id; } },
     QuickPickItemKind: { Separator: -1 },
@@ -144,10 +144,11 @@ const vscode = {
 };
 const load = Module._load;
 Module._load = function(name, ...args) { return name === 'vscode' ? vscode : load.call(this, name, ...args); };
-let BspClient, BuildContextProvider, ContextTreeItem;
+let BspClient, BuildContextProvider, ContextTreeItem, MultiBspProvider;
 try {
     ({ BspClient } = require('../out/bspClient'));
     ({ BuildContextProvider, ContextTreeItem } = require('../out/buildContextProvider'));
+    ({ MultiBspProvider } = require('../out/multiBspProvider'));
 } finally { Module._load = load; }
 function client(enabled = true) {
     const c = new BspClient({ fsPath: '/workspace', toString: () => 'file:///workspace' }, '/workspace/.bsp/server.json');
@@ -254,11 +255,13 @@ test('required unknown kinds block direct target, test, and debug entry points',
 });
 
 function manager(clients) {
-    const changes = new Emitter(), updates = new Emitter();
+    const changes = new Emitter(), updates = new Emitter(), operations = new Emitter(), background = new Emitter();
     const connections = clients.map((client, i) => ({ client, id: 'connection-' + i, connectionId: 'connection-' + i,
         connected: true, config: { name: 'Workspace ' + i, displayName: 'Workspace ' + i } }));
     return { onDidChangeConnections: changes.event, onDidUpdateTargets: updates.event,
-        getConnectedClients: () => connections, connections, changes, updates };
+        onDidChangeOperations: operations.event, onDidChangeBackgroundTasks: background.event,
+        getAllConnections: () => connections, getConnection: id => connections.find(connection => connection.id === id),
+        getConnectedClients: () => connections.filter(connection => connection.connected), connections, changes, updates };
 }
 
 test('workspace GUI shows all fields immediately, enables dependencies after Scheme, and does not preselect an operation', async () => {
@@ -836,8 +839,9 @@ test('required defaults returned in selection appear consistently in trees and c
 test('configuration is available in Contexts without adding a Target menu entry', () => {
     const manifest = require('../package.json');
     const menus = manifest.contributes.menus['view/item/context'];
-    assert.ok(menus.some(item => item.command === 'bsp.configureContext' && item.when.includes('bspContexts')));
-    assert.ok(menus.every(item => item.command !== 'bsp.configureContext' || !item.when.includes('bspTargets')));
+    assert.ok(menus.some(item => item.command === 'bsp.configureContext' && item.when.includes('bspTargets')));
+    assert.ok(menus.every(item => item.command !== 'bsp.configureContext' || item.when.includes('/buildContextScope/')));
+    assert.ok(manifest.contributes.views.explorer.every(view => view.id !== 'bspContexts'));
     assert.ok(manifest.contributes.commands.some(item => item.command === 'bsp.configureContext'));
 });
 
@@ -1132,4 +1136,352 @@ test('Contexts scope reuse actions follow negotiation and preserve standard capa
     assert.doesNotMatch(limited.contextValue, /canRun|canTest|canDebug/);
     await assert.rejects(provider.execute(limited, 'run', 'reuse'), /does not support run/);
     provider.dispose();
+});
+
+test('BSP explorer groups all targets by the dependency tag and preserves server order', async t => {
+    const c = client(false), m = manager([c]);
+    const contexts = new BuildContextProvider(m), explorer = new MultiBspProvider(m, undefined, contexts);
+    t.after(() => { explorer.dispose(); contexts.dispose(); });
+    const library = { ...target, id: { uri: 'target://library' }, displayName: 'Library', tags: ['dependency', 'library'] };
+    const dependencyTests = { ...target, id: { uri: 'target://library-tests' }, displayName: 'LibraryTests',
+        tags: ['dependency', 'test'], capabilities: { canTest: true, canDebug: true } };
+    const app = { ...target, dependencies: [library.id] };
+    const appTests = { ...target, id: { uri: 'target://app-tests' }, displayName: 'AppTests', tags: ['test'] };
+    c.buildTargets = [library, app, dependencyTests, appTests];
+    const [server] = await explorer.getChildren();
+    const groups = await explorer.getChildren(server);
+    assert.deepEqual(groups.map(item => item.label), ['Targets (2)', 'Dependencies (2)']);
+    assert.deepEqual(groups.map(item => item.collapsibleState), [2, 1]);
+    assert.ok(groups.every(item => item.contextValue === 'targetCollection'));
+    const roots = await explorer.getChildren(groups[0]), dependencies = await explorer.getChildren(groups[1]);
+    assert.deepEqual(roots.map(item => item.buildTarget), [app, appTests]);
+    assert.deepEqual(dependencies.map(item => item.buildTarget), [library, dependencyTests]);
+    assert.match(explorer.getTreeItem(dependencies[0]).contextValue, /canCompile/);
+    assert.match(explorer.getTreeItem(dependencies[1]).contextValue, /canTest.*canDebug/);
+    assert.doesNotMatch(explorer.getTreeItem(dependencies[1]).contextValue, /canCompile|canRun/);
+    const details = await explorer.getChildren(roots[0]);
+    const references = await explorer.getChildren(details.find(item => item.type === 'dependencies'));
+    assert.deepEqual(references.map(item => item.buildTarget), [library]);
+    assert.equal(references[0].collapsibleState, 0);
+    assert.equal(c.requests.length, 0, 'Standard servers must not receive configuration queries');
+    const refreshed = await explorer.getChildren(server);
+    assert.deepEqual(refreshed.map(item => item.id), groups.map(item => item.id));
+});
+
+test('BSP explorer loads context fields independently and refreshes only the changed scope', async t => {
+    const c = client(), other = client(), m = manager([c, other]);
+    const contexts = new BuildContextProvider(m), explorer = new MultiBspProvider(m, undefined, contexts);
+    t.after(() => { explorer.dispose(); contexts.dispose(); });
+    const [server, otherServer] = await explorer.getChildren();
+    const [root, targets, dependencies] = await explorer.getChildren(server);
+    const [otherRoot, otherTargets] = await explorer.getChildren(otherServer);
+    assert.equal(root.label, 'Build Context');
+    assert.equal(targets.label, 'Targets (1)');
+    assert.equal(dependencies.label, 'Dependencies (0)');
+    assert.equal(dependencies.collapsibleState, 0);
+    assert.notEqual(root.id, otherRoot.id);
+    assert.notEqual(targets.id, otherTargets.id);
+    assert.notEqual((await explorer.getChildren(targets))[0].id, (await explorer.getChildren(otherTargets))[0].id);
+    assert.equal(c.requests.length, 0);
+    assert.equal(other.requests.length, 0);
+    const changes = [];
+    explorer.onDidChangeTreeData(item => changes.push(item));
+    let resolveOptions;
+    c.contextOptions = params => new Promise(resolve => { resolveOptions = () => resolve(options(params.selection)); });
+    const pending = explorer.getChildren(root);
+    assert.equal((await explorer.getChildren(targets)).length, 1, 'Targets must remain accessible while configuration loads');
+    assert.equal((await explorer.getChildren(otherServer))[0], otherRoot);
+    resolveOptions();
+    const fields = await pending;
+    assert.deepEqual(fields.map(item => item.label), ['Build mode']);
+    assert.match(explorer.getTreeItem(root).contextValue, /canCompile.*canRun.*canTest.*canDebug/);
+    assert.deepEqual(changes, [root]);
+    await explorer.getChildren(root);
+    assert.equal(c.requests.length, 1, 'Expanding the same scope must reuse its configuration');
+    assert.deepEqual(changes, [root], 'Cached scopes must not cause refresh loops');
+    c.contextOptions = params => options(params.selection);
+    changes.length = 0;
+    picks.push(items => items.find(item => item.option?.id === 'release'));
+    await contexts.selectDimension(fields[0]);
+    assert.deepEqual(changes, [root]);
+    assert.equal((await explorer.getChildren(root))[0].description, 'Release');
+    assert.deepEqual(other.contexts.getSelection({}), {});
+    assert.equal(other.requests.length, 0);
+    await contexts.execute(root, 'run');
+    assert.equal(c.requests.at(-1).method, 'buildTarget/run');
+    const resolved = c.requests.find(request => request.method === 'workspace/resolveContext');
+    assert.equal(resolved.params.selection['provider.mode'], 'release');
+});
+
+test('BSP explorer refreshes groups after target updates and reconnects', async t => {
+    const c = client(), m = manager([c]);
+    const contexts = new BuildContextProvider(m), explorer = new MultiBspProvider(m, undefined, contexts);
+    t.after(() => { explorer.dispose(); contexts.dispose(); });
+    const [server] = await explorer.getChildren();
+    const [root, targets, dependencies] = await explorer.getChildren(server);
+    await explorer.getChildren(root);
+    const library = { ...target, id: { uri: 'target://library' }, tags: ['dependency'] };
+    c.buildTargets.push(library);
+    m.updates.fire();
+    const updated = await explorer.getChildren(server);
+    assert.deepEqual(updated.map(item => item.label), ['Build Context', 'Targets (1)', 'Dependencies (1)']);
+    assert.equal(updated[0], root);
+    assert.deepEqual(updated.slice(1).map(item => item.id), [targets.id, dependencies.id]);
+    assert.equal(root.snapshot, undefined);
+    assert.doesNotMatch(root.contextValue, /canCompile/);
+    await explorer.getChildren(root);
+    assert.match(root.contextValue, /canCompile/);
+    m.connections[0].connected = false;
+    c.isConnected = false;
+    m.changes.fire();
+    assert.equal(contexts.getConnectionItem(m.connections[0].id), undefined);
+    assert.deepEqual((await explorer.getChildren(server)).map(item => item.label), ['Disconnected']);
+    assert.deepEqual(await explorer.getChildren(targets), []);
+    const replacement = client(false);
+    Object.assign(m.connections[0], { connected: true, client: replacement });
+    m.changes.fire();
+    assert.deepEqual((await explorer.getChildren(server)).map(item => item.label), ['Targets (1)', 'Dependencies (0)']);
+    replacement.contexts.negotiate(accepted());
+    m.changes.fire();
+    const [newRoot] = await explorer.getChildren(server);
+    assert.notEqual(newRoot, root);
+    assert.equal(newRoot.id, root.id);
+    assert.equal(newRoot.entry.client, replacement);
+    explorer.dispose(); contexts.dispose();
+    assert.equal(m.changes.listeners.size, 0);
+    assert.equal(m.updates.listeners.size, 0);
+});
+
+test('BSP explorer handles failed and empty target discovery without filtering dependency-only projects', async t => {
+    const c = client(false), m = manager([c]);
+    const explorer = new MultiBspProvider(m);
+    t.after(() => explorer.dispose());
+    const [server] = await explorer.getChildren();
+    let requests = 0;
+    c.buildTargets = [];
+    c.getBuildTargets = async () => { requests++; throw new Error('Discovery failed'); };
+    const [error] = await explorer.getChildren(server);
+    assert.equal(error.type, 'error');
+    assert.match(error.label, /Discovery failed/);
+    c.getBuildTargets = async () => { requests++; return []; };
+    const empty = await explorer.getChildren(server);
+    assert.deepEqual(empty.map(item => item.label), ['Targets (0)', 'Dependencies (0)']);
+    assert.ok(empty.every(item => item.collapsibleState === 0));
+    assert.deepEqual(await explorer.getChildren(empty[0]), []);
+    assert.deepEqual(await explorer.getChildren(empty[1]), []);
+    assert.equal(requests, 2, 'Expanding groups must not repeat target discovery');
+    c.getBuildTargets = async () => {
+        requests++;
+        c.buildTargets = [{ ...target, tags: ['dependency', 'test'] }];
+        return c.buildTargets;
+    };
+    const groups = await explorer.getChildren(server);
+    assert.deepEqual(groups.map(item => item.label), ['Targets (0)', 'Dependencies (1)']);
+    assert.equal((await explorer.getChildren(groups[1])).length, 1);
+    assert.equal(requests, 3);
+});
+
+test('favorites belong to one BSP configuration and survive connection ID changes', async t => {
+    const first = client(false), second = client(false), third = client(false);
+    const m = manager([first, second, third]);
+    m.connections.forEach((connection, index) => {
+        connection.config = { name: 'BSP', displayName: 'BSP',
+            configPath: index === 2 ? '/workspace/.bsp/other.json' : '/workspace/.bsp/server.json',
+            workspaceUri: { toString: () => index === 1 ? 'file:///other-workspace' : 'file:///workspace' } };
+    });
+    const saved = new Map();
+    const context = { workspaceState: { get: (key, fallback) => saved.get(key) ?? fallback,
+        update: async (key, value) => { saved.set(key, structuredClone(value)); } } };
+    let explorer = new MultiBspProvider(m, context);
+    t.after(() => explorer.dispose());
+    await explorer.addToFavorites(id.uri, m.connections[0].id);
+    let servers = await explorer.getChildren();
+    assert.ok(servers.every(item => item.type === 'connection'));
+    assert.equal(servers[0].description, undefined);
+    assert.match(servers[0].tooltip, /Status: Connected/);
+    assert.deepEqual((await explorer.getChildren(servers[0])).map(item => item.label),
+        ['Favorites (1)', 'Targets (1)', 'Dependencies (0)']);
+    for (const server of servers.slice(1)) {
+        assert.ok((await explorer.getChildren(server)).every(item => item.type !== 'favoritesGroup'));
+    }
+    const [favorites, targets] = await explorer.getChildren(servers[0]);
+    const [favorite] = await explorer.getChildren(favorites);
+    const [normal] = await explorer.getChildren(targets);
+    assert.equal(favorite.label, 'App');
+    assert.notEqual(favorite.id, normal.id);
+    assert.match(explorer.getTreeItem(normal).contextValue, /favorite/);
+    const [otherTargets] = await explorer.getChildren(servers[1]);
+    const [otherNormal] = await explorer.getChildren(otherTargets);
+    assert.doesNotMatch(explorer.getTreeItem(otherNormal).contextValue, /favorite/);
+    await explorer.addToFavorites(id.uri, m.connections[1].id);
+    await explorer.addToFavorites(id.uri, m.connections[2].id);
+    await explorer.removeFromFavorites(id.uri, m.connections[0].id);
+    assert.equal(explorer.isFavorite(id.uri, m.connections[0].id), false);
+    assert.equal(explorer.isFavorite(id.uri, m.connections[1].id), true);
+    assert.equal(explorer.isFavorite(id.uri, m.connections[2].id), true);
+    await explorer.addToFavorites(id.uri, m.connections[0].id);
+    explorer.dispose();
+    m.connections.forEach((connection, index) => { connection.id = 'reconnected-' + index; connection.connectionId = connection.id; });
+    explorer = new MultiBspProvider(m, context);
+    servers = await explorer.getChildren();
+    const [restoredGroup] = await explorer.getChildren(servers[0]);
+    const [restored] = await explorer.getChildren(restoredGroup);
+    assert.equal(restoredGroup.id, favorites.id);
+    assert.equal(restored.id, favorite.id);
+    assert.equal(restored.connectionId, 'reconnected-0');
+    m.connections[0].connected = false;
+    m.changes.fire();
+    const [offlineServer] = await explorer.getChildren();
+    assert.match(offlineServer.description, /Disconnected/);
+    const [offlineGroup, status] = await explorer.getChildren(offlineServer);
+    assert.equal(status.label, 'Disconnected');
+    const [offlineFavorite] = await explorer.getChildren(offlineGroup);
+    assert.match(offlineFavorite.contextValue, /favorite disconnected/);
+    assert.equal(offlineFavorite.connectionId, 'reconnected-0');
+    assert.equal(offlineFavorite.buildTarget.capabilities.canRun, false);
+    await explorer.removeFromFavorites(id.uri, 'reconnected-0');
+    assert.deepEqual((await explorer.getChildren(offlineServer)).map(item => item.label), ['Disconnected']);
+});
+
+test('legacy favorites migrate only when their connection is unambiguous', async t => {
+    const a = client(false), b = client(false), m = manager([a, b]);
+    const unique = { ...target, id: { uri: 'target://unique' } };
+    a.buildTargets.push(unique);
+    m.connections[1].connected = false;
+    b.buildTargets = [];
+    const saved = new Map([['bsp.favoriteTargets', [unique.id.uri, id.uri]]]);
+    const context = { workspaceState: { get: (key, fallback) => saved.get(key) ?? fallback,
+        update: async (key, value) => { saved.set(key, structuredClone(value)); } } };
+    const explorer = new MultiBspProvider(m, context);
+    t.after(() => explorer.dispose());
+    assert.equal(explorer.isFavorite(unique.id.uri, 'connection-0'), false);
+    b.buildTargets = [target]; m.connections[1].connected = true;
+    m.changes.fire();
+    assert.equal(explorer.isFavorite(unique.id.uri, 'connection-0'), true);
+    assert.equal(explorer.isFavorite(id.uri, 'connection-0'), false);
+    assert.equal(explorer.isFavorite(id.uri, 'connection-1'), false);
+    assert.deepEqual(saved.get('bsp.favoriteTargetsByConnection').unassigned, [id.uri]);
+    await explorer.addToFavorites(id.uri, 'connection-1');
+    assert.equal(explorer.isFavorite(id.uri, 'connection-1'), true);
+    assert.deepEqual(saved.get('bsp.favoriteTargetsByConnection').unassigned, []);
+});
+
+function recentSection(items) {
+    const start = items.findIndex(item => item.kind === vscode.QuickPickItemKind.Separator && item.label === 'Recent');
+    if (start < 0) { return []; }
+    const end = items.findIndex((item, index) => index > start && item.kind === vscode.QuickPickItemKind.Separator);
+    return items.slice(start + 1, end < 0 ? undefined : end);
+}
+
+function recentPickerFixture(t, count = 6) {
+    const c = client(), provider = new BuildContextProvider(manager([c]));
+    const values = Array.from({ length: count }, (_, i) => ({ id: 'option-' + i, label: 'Option ' + i }));
+    let available = values;
+    c.contextOptions = params => ({ selection: params.selection, dimensions: [{
+        id: 'provider.mode', label: 'Mode', kind: 'enum', required: false, options: available
+    }] });
+    const item = new ContextTreeItem({ connectionId: 'connection-0', client: c, label: 'BSP', scope: {} },
+        { id: 'provider.mode', label: 'Mode', kind: 'enum', required: false, options: values });
+    t.after(() => provider.dispose());
+    return { c, provider, item, values, setOptions: value => { available = value; },
+        choose: async id => {
+            picks.push(items => items.find(item => item.option?.id === id));
+            assert.equal(await provider.selectDimension(item), true);
+        },
+        inspect: async action => {
+            let failure;
+            picks.push((items, picker) => {
+                try { action(items, picker); } catch (error) { failure = error; }
+                return undefined;
+            });
+            assert.equal(await provider.selectDimension(item), false);
+            if (failure) { throw failure; }
+        } };
+}
+
+test('Recent appears at five server options and keeps smaller pickers unchanged', async t => {
+    const f = recentPickerFixture(t, 5);
+    await f.inspect(items => assert.equal(recentSection(items).length, 0));
+    await f.choose('option-0');
+    f.setOptions(f.values.slice(0, 4));
+    await f.inspect(items => {
+        assert.deepEqual(items.map(item => item.label), ['Automatic', 'Option 0', 'Option 1', 'Option 2', 'Option 3']);
+    });
+    f.setOptions(f.values);
+    await f.inspect((items, picker) => {
+        assert.deepEqual(recentSection(items).map(item => item.option.id), ['option-0']);
+        assert.deepEqual(items.filter(item => item.kind === -1).map(item => item.label), ['Recent', 'All options']);
+        assert.equal(picker.activeItems[0], recentSection(items)[0]);
+        assert.deepEqual(items.slice(items.findIndex(item => item.label === 'All options') + 1).map(item => item.option.id),
+            f.values.map(option => option.id));
+    });
+});
+
+test('Recent keeps five successful choices in usage order without duplicates', async t => {
+    const f = recentPickerFixture(t);
+    for (const value of f.values) { await f.choose(value.id); }
+    await f.choose('option-2');
+    const expected = ['option-2', 'option-5', 'option-4', 'option-3', 'option-1'];
+    await f.inspect(items => assert.deepEqual(recentSection(items).map(item => item.option.id), expected));
+    assert.deepEqual(f.c.contexts.recentOptions({}, 'provider.mode'), expected);
+    picks.push(items => items.find(item => item.label === 'Automatic'));
+    assert.equal(await f.provider.selectDimension(f.item), true);
+    assert.deepEqual(f.c.contexts.recentOptions({}, 'provider.mode'), expected);
+    const source = new CancellationTokenSource();
+    source.cancel();
+    assert.equal(await f.provider.selectDimension(f.item, source.token), false);
+    const normal = f.c.contextOptions;
+    f.c.contextOptions = params => {
+        if (params.selection['provider.mode'] === 'option-0') { throw new Error('Selection rejected'); }
+        return normal(params);
+    };
+    picks.push(items => items.find(item => item.option?.id === 'option-0'));
+    await assert.rejects(f.provider.selectDimension(f.item), /Selection rejected/);
+    assert.deepEqual(f.c.contexts.recentOptions({}, 'provider.mode'), expected);
+});
+
+test('Recent uses current destination labels, excludes stale choices, and preserves destination groups', async t => {
+    const f = recentPickerFixture(t);
+    await f.choose('option-0'); await f.choose('option-1'); await f.choose('option-2');
+    const current = [
+        { ...f.values[0], label: 'Renamed device', ...{ dataKind: 'execution-destination', data: {
+            kind: 'device', platform: { id: 'ios', label: 'iOS' }, architecture: 'arm64' } } },
+        { ...f.values[1], availability: false, reason: 'Offline' },
+        ...f.values.slice(3),
+        { id: 'extra', label: 'Extra', dataKind: 'execution-destination', data: { kind: 'simulator',
+            platform: { id: 'ios', label: 'iOS' } } }
+    ];
+    f.setOptions(current);
+    await f.inspect(items => {
+        assert.deepEqual(recentSection(items).map(item => item.label), ['Renamed device']);
+        assert.match(recentSection(items)[0].description, /iOS.*arm64/);
+        assert.deepEqual(items.filter(item => item.kind === -1).map(item => item.label),
+            ['Recent', 'Devices', 'Simulators', 'Other destinations']);
+        assert.ok(items.find(item => item.option?.id === 'option-1'), 'Unavailable choices remain in the full list');
+    });
+    picks.push(items => items.find(item => item.option?.id === 'option-1'));
+    assert.equal(await f.provider.selectDimension(f.item), false);
+    assert.deepEqual(f.c.contexts.recentOptions({}, 'provider.mode'), ['option-2', 'option-1', 'option-0']);
+});
+
+test('Recent history persists by connection, workspace, target scope, and field', async () => {
+    const saved = new Map(), storage = { get: key => saved.get(key),
+        update: async (key, value) => { saved.set(key, structuredClone(value)); } };
+    const create = (identity, workspace = 'file:///workspace') => {
+        const contexts = new BuildContexts(transport().request);
+        contexts.attachPreferences(storage, identity, workspace);
+        return contexts;
+    };
+    const a = create('server-A');
+    await a.rememberOption({}, 'mode', 'release');
+    await a.rememberOption(scope, 'mode', 'debug');
+    const restored = create('server-A');
+    assert.deepEqual(restored.recentOptions({}, 'mode'), ['release']);
+    assert.deepEqual(restored.recentOptions({ workspaceUri: 'file:///workspace' }, 'mode'), ['release']);
+    assert.deepEqual(restored.recentOptions(scope, 'mode'), ['debug']);
+    assert.deepEqual(restored.recentOptions({}, 'destination'), []);
+    assert.deepEqual(restored.recentOptions({ targets: [{ uri: 'target://other' }] }, 'mode'), []);
+    assert.deepEqual(create('server-B').recentOptions({}, 'mode'), []);
+    assert.deepEqual(create('server-A', 'file:///other-workspace').recentOptions({}, 'mode'), []);
+    assert.deepEqual(restored.getSelection({}), {}, 'History must not select configuration values');
 });

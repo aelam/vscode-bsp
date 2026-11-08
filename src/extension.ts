@@ -443,7 +443,10 @@ async function initializeBspExtension(context: vscode.ExtensionContext) {
 
     connectionManager = new BspConnectionManager(context.workspaceState);
     context.subscriptions.push(connectionManager.onDidChangeConnections(() => updateConnectionContext()));
-    multiBspProvider = new MultiBspProvider(connectionManager, context);
+    bspClient = new BspClient(workspaceFolders[0].uri, undefined, undefined, context.workspaceState);
+    const contexts = new BuildContextProvider(connectionManager, bspClient);
+    multiBspProvider = new MultiBspProvider(connectionManager, context, contexts);
+    context.subscriptions.push(contexts, multiBspProvider);
 
     // Register multi-BSP tree data provider
     const multiBspTreeView = vscode.window.createTreeView('bspTargets', {
@@ -452,10 +455,6 @@ async function initializeBspExtension(context: vscode.ExtensionContext) {
     context.subscriptions.push(multiBspTreeView);
     logInfo('Multi-BSP tree view registered');
 
-    // Initialize single BSP client for backward compatibility
-    bspClient = new BspClient(workspaceFolders[0].uri, undefined, undefined, context.workspaceState);
-    const contexts = new BuildContextProvider(connectionManager, bspClient);
-    context.subscriptions.push(contexts, vscode.window.createTreeView('bspContexts', { treeDataProvider: contexts }));
     for (const [command, action] of [
         ['bsp.configureContext', (item: any) => contexts.configure(item)],
         ['bsp.selectContextDimension', (item: any) => contexts.selectDimension(item)],
@@ -502,7 +501,7 @@ async function initializeBspExtension(context: vscode.ExtensionContext) {
     const refreshCommand = vscode.commands.registerCommand('bsp.refresh', () => {
         logInfo('BSP refresh command triggered');
         buildTargetProvider?.refresh();
-        multiBspProvider?.refresh();
+        contexts.refresh();
     });
 
     const reloadCommand = vscode.commands.registerCommand('bsp.reload', async (item) => {
@@ -851,7 +850,7 @@ async function initializeBspExtension(context: vscode.ExtensionContext) {
     const removeFromFavoritesCommand = vscode.commands.registerCommand('bsp.removeFromFavorites', async (item) => {
         if (!multiBspProvider || !item?.buildTarget) return;
         
-        await multiBspProvider.removeFromFavorites(item.buildTarget.id.uri);
+        await multiBspProvider.removeFromFavorites(item.buildTarget.id.uri, item.connectionId);
         vscode.window.showInformationMessage(`Removed "${item.buildTarget.displayName || item.buildTarget.id.uri}" from favorites`);
     });
 

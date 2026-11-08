@@ -1,34 +1,34 @@
 import * as vscode from 'vscode';
+import * as path from 'path';
 import { BspConnectionManager, BspConnection } from './bspConnectionManager';
 import { BuildTarget, BuildTargetIdentifier } from './bspTypes';
 import { logError, logInfo } from './logger';
+import { BuildContextProvider, ContextTreeItem } from './buildContextProvider';
 
-export class MultiBspProvider implements vscode.TreeDataProvider<BspTreeItem> {
-    private _onDidChangeTreeData = new vscode.EventEmitter<BspTreeItem | undefined | null | void>();
+export type BspExplorerItem = BspTreeItem | ContextTreeItem;
+
+export class MultiBspProvider implements vscode.TreeDataProvider<BspExplorerItem>, vscode.Disposable {
+    private _onDidChangeTreeData = new vscode.EventEmitter<BspExplorerItem | undefined | null | void>();
     readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
-    private favoriteTargets = new Set<string>();
+    private favoriteTargets = new Map<string, Set<string>>();
+    private legacyFavorites = new Set<string>();
     private context?: vscode.ExtensionContext;
-    private targetToConnectionMap = new Map<string, string>(); // targetId -> connectionId
 
-    constructor(private connectionManager: BspConnectionManager, context?: vscode.ExtensionContext) {
+    private subscriptions: vscode.Disposable[];
+
+    constructor(private connectionManager: BspConnectionManager, context?: vscode.ExtensionContext,
+        private contexts?: BuildContextProvider) {
         this.context = context;
-        
-        // Listen to connection changes
-        this.connectionManager.onDidChangeConnections(() => {
-            this.rebuildTargetMappings();
-            this.refresh();
-        });
-        
-        this.connectionManager.onDidChangeOperations(() => this.refresh());
-        this.connectionManager.onDidChangeBackgroundTasks(() => this.refresh());
-
-        // Listen to targets updates
-        this.connectionManager.onDidUpdateTargets(() => {
-            this.rebuildTargetMappings();
-            this.refresh();
-        });
-        
-        // Load favorite targets from configuration
+        const updateTargets = () => { this.migrateLegacyFavorites(); this.refresh(); };
+        this.subscriptions = [
+            connectionManager.onDidChangeConnections(updateTargets),
+            connectionManager.onDidChangeOperations(() => this.refresh()),
+            connectionManager.onDidChangeBackgroundTasks(() => this.refresh()),
+            connectionManager.onDidUpdateTargets(updateTargets)
+        ];
+        if (contexts) {
+            this.subscriptions.push(contexts.onDidChangeTreeData(item => this._onDidChangeTreeData.fire(item)));
+        }
         this.loadFavoriteTargets();
     }
 
@@ -36,236 +36,125 @@ export class MultiBspProvider implements vscode.TreeDataProvider<BspTreeItem> {
         this._onDidChangeTreeData.fire();
     }
 
-    private async getFavoriteTargetItems(): Promise<BspTreeItem[]> {
-        const favoriteItems: BspTreeItem[] = [];
-        const processedFavorites = new Set<string>();
-        
-        // Process all favorite targets with known connection mappings first
-        for (const favoriteId of this.favoriteTargets) {
-            const connectionId = this.targetToConnectionMap.get(favoriteId);
-            if (!connectionId) continue;
-            
-            const connection = this.connectionManager.getConnection(connectionId);
-            if (!connection || !connection.connected) continue;
-            
-            try {
-                // Use cached targets instead of making new requests
-                const targets = connection.client.targets;
-                const target = targets.find(t => t.id.uri === favoriteId);
-                
-                if (target) {
-                    processedFavorites.add(favoriteId);
-                    
-                    const item = new BspTreeItem(
-                        `${target.displayName || target.id.uri} (${connection.config.displayName})`,
-                        vscode.TreeItemCollapsibleState.Collapsed,
-                        'buildTarget'
-                    );
-                    
-                    item.connectionId = connection.id;
-                    item.buildTarget = target;
-                    item.description = this.getBuildTargetDescription(target);
-                    item.tooltip = this.getBuildTargetTooltip(target, connection.config.displayName);
-                    item.contextValue = this.getBuildTargetContextValue(target) + ' favorite';
-                    item.iconPath = this.getBuildTargetIcon(target);
-                    
-                    favoriteItems.push(item);
-                } else {
-                    // Target not found in cache, show as connected but not loaded
-                    const displayName = this.extractTargetNameFromUri(favoriteId);
-                    const item = new BspTreeItem(
-                        `${displayName} (${connection.config.displayName})`,
-                        vscode.TreeItemCollapsibleState.None,
-                        'buildTarget'
-                    );
-                    
-                    item.connectionId = connection.id;
-                    item.buildTarget = {
-                        id: { uri: favoriteId },
-                        displayName: displayName,
-                        baseDirectory: '',
-                        tags: [],
-                        capabilities: { canCompile: false, canTest: false, canRun: false, canDebug: false },
-                        languageIds: [],
-                        dependencies: []
-                    };
-                    item.description = '[Loading...]';
-                    item.tooltip = `Target: ${displayName}\nServer: ${connection.config.displayName}\nStatus: Loading...`;
-                    item.contextValue = 'buildTarget favorite loading';
-                    item.iconPath = new vscode.ThemeIcon('loading~spin');
-                    
-                    favoriteItems.push(item);
-                    processedFavorites.add(favoriteId);
-                }
-            } catch (error) {
-                // Ignore errors for individual connections, we'll handle disconnected ones later
-            }
-        }
-        
-        // Then, show remaining favorites from disconnected servers as placeholders
-        for (const favoriteId of this.favoriteTargets) {
-            if (processedFavorites.has(favoriteId)) continue;
-            
-            // Find the connection this target belongs to (if we have mapping)
-            const connectionId = this.targetToConnectionMap.get(favoriteId);
-            const connection = connectionId ? this.connectionManager.getConnection(connectionId) : null;
-            
-            const displayName = this.extractTargetNameFromUri(favoriteId);
-            const serverName = connection?.config.displayName || 'Unknown Server';
-            
-            const item = new BspTreeItem(
-                `${displayName} (${serverName})`,
-                vscode.TreeItemCollapsibleState.None,
-                'buildTarget'
-            );
-            
-            // Create placeholder target
-            item.buildTarget = {
-                id: { uri: favoriteId },
-                displayName: displayName,
-                baseDirectory: '',
-                tags: [],
-                capabilities: {
-                    canCompile: false,
-                    canTest: false,
-                    canRun: false,
-                    canDebug: false
-                },
-                languageIds: [],
-                dependencies: []
-            };
-            
-            item.connectionId = connectionId || '';
-            item.description = '[Disconnected]';
-            item.tooltip = `Target: ${displayName}\nServer: ${serverName}\nStatus: Disconnected`;
-            item.contextValue = 'buildTarget favorite disconnected';
-            item.iconPath = new vscode.ThemeIcon('warning');
-            
-            favoriteItems.push(item);
-        }
-        
-        return favoriteItems;
+    dispose(): void {
+        this.subscriptions.forEach(subscription => subscription.dispose());
+        this._onDidChangeTreeData.dispose();
     }
 
-    private extractTargetNameFromUri(uri: string): string {
-        // Extract a readable name from the URI
-        const parts = uri.split('/');
-        return parts[parts.length - 1] || uri;
+    private connectionKey(connection: BspConnection): string {
+        return JSON.stringify([connection.config.workspaceUri?.toString() ?? '',
+            connection.config.configPath ? path.resolve(connection.config.configPath) : connection.id]);
+    }
+
+    private favoritesFor(connection: BspConnection): Set<string> {
+        return this.favoriteTargets.get(this.connectionKey(connection)) ?? new Set();
+    }
+
+    private favoriteGroup(connection: BspConnection): BspTreeItem[] {
+        const count = this.favoritesFor(connection).size;
+        if (!count) { return []; }
+        const item = new BspTreeItem(`Favorites (${count})`, vscode.TreeItemCollapsibleState.Expanded, 'favoritesGroup');
+        item.id = JSON.stringify(['favorites', this.connectionKey(connection)]);
+        item.connectionId = connection.id;
+        return [item];
+    }
+
+    private getFavoriteTargetItems(connectionId: string): BspTreeItem[] {
+        const connection = this.connectionManager.getConnection(connectionId);
+        if (!connection) { return []; }
+        return [...this.favoritesFor(connection)].map(uri => {
+            const target = connection.connected ? connection.client.targets.find(target => target.id.uri === uri) : undefined;
+            if (target) { return this.buildTargetItem(connection, target, true); }
+            const item = new BspTreeItem(uri.split('/').pop() || uri, vscode.TreeItemCollapsibleState.None, 'buildTarget');
+            item.id = JSON.stringify(['favoriteTarget', this.connectionKey(connection), uri]);
+            item.connectionId = connectionId;
+            item.buildTarget = { id: { uri }, tags: [], languageIds: [], dependencies: [],
+                capabilities: { canCompile: false, canRun: false, canTest: false, canDebug: false } };
+            item.description = connection.connected ? 'Target unavailable' : 'Disconnected';
+            item.tooltip = `${uri}\n${item.description}`;
+            item.contextValue = `buildTarget favorite ${connection.connected ? 'loading' : 'disconnected'}`;
+            item.iconPath = new vscode.ThemeIcon('warning');
+            return item;
+        });
     }
 
     private loadFavoriteTargets(): void {
-        try {
-            if (this.context) {
-                // Use extension context storage (more reliable)
-                const favorites = this.context.workspaceState.get<string[]>('bsp.favoriteTargets', []);
-                this.favoriteTargets = new Set(favorites);
-                logInfo(`Loaded ${favorites.length} favorite targets from extension storage`);
-            } else {
-                // Fallback to configuration
-                const config = vscode.workspace.getConfiguration('bsp');
-                const favorites = config.get<string[]>('favoriteTargets') || [];
-                this.favoriteTargets = new Set(favorites);
-                logInfo(`Loaded ${favorites.length} favorite targets from configuration`);
+        const state = this.context?.workspaceState.get<{
+            connections: Record<string, string[]>; unassigned: string[];
+        }>('bsp.favoriteTargetsByConnection');
+        if (state) {
+            for (const [key, targets] of Object.entries(state.connections)) {
+                this.favoriteTargets.set(key, new Set(targets));
             }
-        } catch (error) {
-            // If loading fails, start with empty set
-            logError('Failed to load favorite targets, starting with empty set', error);
-            this.favoriteTargets = new Set();
+            this.legacyFavorites = new Set(state.unassigned);
+        } else {
+            this.legacyFavorites = new Set(this.context?.workspaceState.get<string[]>('bsp.favoriteTargets')
+                ?? vscode.workspace.getConfiguration('bsp').get<string[]>('favoriteTargets') ?? []);
         }
+        this.migrateLegacyFavorites();
     }
 
-    private rebuildTargetMappings(): void {
-        // Rebuild targetToConnectionMap for all favorite targets
+    private migrateLegacyFavorites(): void {
+        if (!this.legacyFavorites.size) { return; }
         const connections = this.connectionManager.getAllConnections();
-        
-        for (const favoriteId of this.favoriteTargets) {
-            // Find the connection that contains this target
-            let found = false;
-            for (const connection of connections) {
-                if (connection.connected && connection.client.targets.length > 0) {
-                    const target = connection.client.targets.find(t => t.id.uri === favoriteId);
-                    if (target) {
-                        const oldConnectionId = this.targetToConnectionMap.get(favoriteId);
-                        if (oldConnectionId !== connection.id) {
-                            this.targetToConnectionMap.set(favoriteId, connection.id);
-                            logInfo(`Updated mapping: ${favoriteId} -> ${connection.config.displayName}`);
-                        }
-                        found = true;
-                        break;
-                    }
-                }
-            }
-            
-            // If target not found in any connected server, keep existing mapping for now
-            if (!found && !this.targetToConnectionMap.has(favoriteId)) {
-                logInfo(`No mapping found for favorite: ${favoriteId}`);
-            }
+        // Wait until each connection has targets before assigning old URI-only favorites.
+        if (connections.some(connection => !connection.connected && connection.client.targets.length === 0)) { return; }
+        let changed = false;
+        for (const uri of this.legacyFavorites) {
+            const matches = connections.filter(connection => connection.client.targets.some(target => target.id.uri === uri));
+            if (matches.length !== 1) { continue; }
+            this.addFavorite(matches[0], uri);
+            this.legacyFavorites.delete(uri);
+            changed = true;
         }
+        if (changed) { void this.saveFavoriteTargets().catch(error => logError('Failed to save favorites', error)); }
+    }
+
+    private addFavorite(connection: BspConnection, targetId: string): void {
+        const key = this.connectionKey(connection), targets = this.favoritesFor(connection);
+        targets.add(targetId);
+        this.favoriteTargets.set(key, targets);
     }
 
     private async saveFavoriteTargets(): Promise<void> {
-        try {
-            const favorites = Array.from(this.favoriteTargets);
-            
-            if (this.context) {
-                // Use extension context storage (more reliable)
-                await this.context.workspaceState.update('bsp.favoriteTargets', favorites);
-                logInfo(`Saved ${favorites.length} favorite targets to extension storage`);
-            } else {
-                // Fallback to workspace configuration
-                const workspaceConfig = vscode.workspace.getConfiguration();
-                await workspaceConfig.update('bsp.favoriteTargets', favorites, vscode.ConfigurationTarget.Workspace);
-                logInfo(`Saved ${favorites.length} favorite targets to workspace configuration`);
-            }
-        } catch (error) {
-            logError('Failed to save favorite targets', error);
-            throw error;
-        }
+        await this.context?.workspaceState.update('bsp.favoriteTargetsByConnection', {
+            connections: Object.fromEntries([...this.favoriteTargets].map(([key, targets]) => [key, [...targets]])),
+            unassigned: [...this.legacyFavorites]
+        });
     }
 
-    async addToFavorites(targetId: string, connectionId?: string): Promise<void> {
-        this.favoriteTargets.add(targetId);
-        
-        // Update targetToConnectionMap for the new favorite
-        if (connectionId) {
-            this.targetToConnectionMap.set(targetId, connectionId);
-        } else {
-            // Fallback: search in all connections
-            const connections = this.connectionManager.getAllConnections();
-            for (const connection of connections) {
-                if (connection.connected && connection.client.targets.length > 0) {
-                    const target = connection.client.targets.find(t => t.id.uri === targetId);
-                    if (target) {
-                        this.targetToConnectionMap.set(targetId, connection.id);
-                        break;
-                    }
-                }
-            }
-        }
-        
+    async addToFavorites(targetId: string, connectionId: string): Promise<void> {
+        const connection = this.connectionManager.getConnection(connectionId);
+        if (!connection) { throw new Error('BSP connection not found'); }
+        this.addFavorite(connection, targetId);
+        this.legacyFavorites.delete(targetId);
         await this.saveFavoriteTargets();
         this.refresh();
-        logInfo(`Added ${targetId} to favorites`);
     }
 
-    async removeFromFavorites(targetId: string): Promise<void> {
-        this.favoriteTargets.delete(targetId);
+    async removeFromFavorites(targetId: string, connectionId: string): Promise<void> {
+        const connection = this.connectionManager.getConnection(connectionId);
+        if (!connection) { return; }
+        const key = this.connectionKey(connection), targets = this.favoritesFor(connection);
+        targets.delete(targetId);
+        if (targets.size === 0) { this.favoriteTargets.delete(key); }
         await this.saveFavoriteTargets();
         this.refresh();
-        logInfo(`Removed ${targetId} from favorites`);
     }
 
-    isFavorite(targetId: string): boolean {
-        return this.favoriteTargets.has(targetId);
+    isFavorite(targetId: string, connectionId: string): boolean {
+        const connection = this.connectionManager.getConnection(connectionId);
+        return !!connection && this.favoritesFor(connection).has(targetId);
     }
 
-    getTreeItem(element: BspTreeItem): vscode.TreeItem {
+    getTreeItem(element: BspExplorerItem): vscode.TreeItem {
+        if (element instanceof ContextTreeItem) { return element; }
         const target = element.buildTarget;
         const connection = element.connectionId ? this.connectionManager.getConnection(element.connectionId) : undefined;
         if (!target || !connection?.connected) { return element; }
         const operation = connection.client.operations.get(target.id.uri);
         if (element.type === 'buildTarget' && !/loading|disconnected/.test(element.contextValue ?? '')) {
-            const favorite = /favorite/.test(element.contextValue ?? '') ? ' favorite' : '';
+            const favorite = this.isFavorite(target.id.uri, connection.id) ? ' favorite' : '';
             element.contextValue = this.getBuildTargetContextValue(target) + favorite;
             if (connection.client.contexts?.enabled) {
                 const capabilities = {
@@ -293,36 +182,25 @@ export class MultiBspProvider implements vscode.TreeDataProvider<BspTreeItem> {
         return element;
     }
 
-    async getChildren(element?: BspTreeItem): Promise<BspTreeItem[]> {
-        if (!element) {
-            // Root level - show favorites and connections directly
-            const items: BspTreeItem[] = [];
-            
-            // Add favorites group if there are any favorite targets
-            if (this.favoriteTargets.size > 0) {
-                const favoritesItem = new BspTreeItem(
-                    `Favorites (${this.favoriteTargets.size})`,
-                    vscode.TreeItemCollapsibleState.Expanded,
-                    'favoritesGroup'
-                );
-                items.push(favoritesItem);
-            }
-            
-            // Add all connections directly (no extra grouping)
-            const connectionItems = this.getConnectionItems();
-            items.push(...connectionItems);
-            
-            return items;
+    async getChildren(element?: BspExplorerItem): Promise<BspExplorerItem[]> {
+        if (element instanceof ContextTreeItem) {
+            const previous = element.snapshot;
+            const children = await this.contexts?.getChildren(element) ?? [];
+            if (previous !== element.snapshot) { this._onDidChangeTreeData.fire(element); }
+            return children;
         }
+        if (!element) { return this.getConnectionItems(); }
 
-        if (element.type === 'favoritesGroup') {
-            // Show favorite targets from all connections
-            return this.getFavoriteTargetItems();
+        if (element.type === 'favoritesGroup' && element.connectionId) {
+            return this.getFavoriteTargetItems(element.connectionId);
         }
 
         if (element.type === 'connection' && element.connectionId) {
-            // Show build targets for a specific connection
-            return this.getBuildTargetItems(element.connectionId);
+            return this.getConnectionGroups(element.connectionId);
+        }
+
+        if ((element.type === 'targetsGroup' || element.type === 'dependencyTargetsGroup') && element.connectionId) {
+            return this.getBuildTargetItems(element.connectionId, element.type === 'dependencyTargetsGroup');
         }
 
         if (element.type === 'buildTarget' && element.connectionId) {
@@ -348,6 +226,7 @@ export class MultiBspProvider implements vscode.TreeDataProvider<BspTreeItem> {
                 'connection'
             );
             
+            item.id = JSON.stringify(['connection', connection.id]);
             item.connectionId = connection.id;
             item.description = this.getConnectionDescription(connection);
             item.tooltip = this.getConnectionTooltip(connection);
@@ -358,10 +237,10 @@ export class MultiBspProvider implements vscode.TreeDataProvider<BspTreeItem> {
         });
     }
 
-    private async getBuildTargetItems(connectionId: string): Promise<BspTreeItem[]> {
+    private async getConnectionGroups(connectionId: string): Promise<BspExplorerItem[]> {
         const connection = this.connectionManager.getConnection(connectionId);
         if (!connection || !connection.connected) {
-            return [new BspTreeItem(
+            return [...(connection ? this.favoriteGroup(connection) : []), new BspTreeItem(
                 connection?.connected === false ? 'Disconnected' : 'Not Connected',
                 vscode.TreeItemCollapsibleState.None,
                 'status'
@@ -376,30 +255,55 @@ export class MultiBspProvider implements vscode.TreeDataProvider<BspTreeItem> {
                 targets = await connection.client.getBuildTargets();
             }
             
-            return targets.map(target => {
-                const item = new BspTreeItem(
-                    target.displayName || target.id.uri,
-                    vscode.TreeItemCollapsibleState.Collapsed,
-                    'buildTarget'
-                );
-                
-                item.connectionId = connectionId;
-                item.buildTarget = target;
-                item.description = this.getBuildTargetDescription(target);
-                item.tooltip = this.getBuildTargetTooltip(target, connection.config.displayName);
-                item.contextValue = this.getBuildTargetContextValue(target);
-                item.iconPath = this.getBuildTargetIcon(target);
-                
-                return item;
-            });
+            const dependencyCount = targets.filter(target => target.tags.includes('dependency')).length;
+            const context = this.contexts?.getConnectionItem(connectionId);
+            return [
+                ...(context ? [context] : []),
+                ...this.favoriteGroup(connection),
+                this.targetGroup(connectionId, 'targetsGroup', targets.length - dependencyCount),
+                this.targetGroup(connectionId, 'dependencyTargetsGroup', dependencyCount)
+            ];
         } catch (error) {
             logError(`Error getting build targets for ${connection.config.displayName}`, error);
-            return [new BspTreeItem(
+            return [...this.favoriteGroup(connection), new BspTreeItem(
                 `Error: ${error}`,
                 vscode.TreeItemCollapsibleState.None,
                 'error'
             )];
         }
+    }
+
+    private targetGroup(connectionId: string, type: 'targetsGroup' | 'dependencyTargetsGroup', count: number): BspTreeItem {
+        const dependencies = type === 'dependencyTargetsGroup';
+        const item = new BspTreeItem(`${dependencies ? 'Dependencies' : 'Targets'} (${count})`,
+            count === 0 ? vscode.TreeItemCollapsibleState.None
+                : dependencies ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.Expanded, type);
+        item.id = JSON.stringify(['targetCollection', connectionId, type]);
+        item.connectionId = connectionId;
+        item.contextValue = 'targetCollection';
+        item.iconPath = new vscode.ThemeIcon(dependencies ? 'library' : 'target');
+        return item;
+    }
+
+    private getBuildTargetItems(connectionId: string, dependencies: boolean): BspTreeItem[] {
+        const connection = this.connectionManager.getConnection(connectionId);
+        if (!connection?.connected) { return []; }
+        return connection.client.targets.filter(target => target.tags.includes('dependency') === dependencies)
+            .map(target => this.buildTargetItem(connection, target));
+    }
+
+    private buildTargetItem(connection: BspConnection, target: BuildTarget, favorite = false): BspTreeItem {
+        const item = new BspTreeItem(target.displayName || target.id.uri,
+            vscode.TreeItemCollapsibleState.Collapsed, 'buildTarget');
+        item.id = JSON.stringify([favorite ? 'favoriteTarget' : 'buildTarget', this.connectionKey(connection), target.id.uri]);
+        item.connectionId = connection.id;
+        item.buildTarget = target;
+        item.description = this.getBuildTargetDescription(target);
+        item.tooltip = this.getBuildTargetTooltip(target, connection.config.displayName);
+        item.contextValue = this.getBuildTargetContextValue(target);
+        if (this.isFavorite(target.id.uri, connection.id)) { item.contextValue += ' favorite'; }
+        item.iconPath = this.getBuildTargetIcon(target);
+        return item;
     }
 
     private async getTargetDetailItems(element: BspTreeItem): Promise<BspTreeItem[]> {
@@ -474,9 +378,9 @@ export class MultiBspProvider implements vscode.TreeDataProvider<BspTreeItem> {
         return name.length > 0 ? name : uri;
     }
 
-    private getConnectionDescription(connection: BspConnection): string {
+    private getConnectionDescription(connection: BspConnection): string | undefined {
         if (connection.connected) {
-            return '✓ Connected';
+            return undefined;
         } else if (connection.error) {
             return '✗ Error';
         } else {
@@ -624,7 +528,7 @@ export class BspTreeItem extends vscode.TreeItem {
     constructor(
         label: string,
         collapsibleState: vscode.TreeItemCollapsibleState,
-        public readonly type: 'connection' | 'buildTarget' | 'capability' | 'dependencies' | 'dependency' | 'languages' | 'status' | 'error' | 'favoritesGroup'
+        public readonly type: 'connection' | 'buildTarget' | 'capability' | 'dependencies' | 'dependency' | 'languages' | 'status' | 'error' | 'favoritesGroup' | 'targetsGroup' | 'dependencyTargetsGroup'
     ) {
         super(label, collapsibleState);
         

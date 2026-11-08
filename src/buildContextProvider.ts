@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { logError } from './logger';
 import { CancellationToken } from 'vscode-jsonrpc/node';
 import type { BspClient } from './bspClient';
 import type { BspConnectionManager } from './bspConnectionManager';
@@ -58,7 +59,12 @@ export class BuildContextProvider implements vscode.TreeDataProvider<ContextTree
 
     refresh(): void {
         this.installPreparation();
-        for (const item of this.scopeItems.values()) { item.revision++; item.snapshot = undefined; }
+        const active = new Set(this.entries().map(entry => this.scopeKey(entry)));
+        for (const [key, item] of this.scopeItems) {
+            item.revision++; item.snapshot = undefined;
+            item.contextValue = 'buildContextScope';
+            if (!active.has(key)) { this.scopeItems.delete(key); }
+        }
         this.changes.fire(undefined);
     }
     dispose(): void {
@@ -67,6 +73,14 @@ export class BuildContextProvider implements vscode.TreeDataProvider<ContextTree
         this.hooked.clear(); this.scopeItems.clear(); this.scopeLoads.clear(); this.changes.dispose();
     }
     getTreeItem(item: ContextTreeItem): vscode.TreeItem { return item; }
+
+    getConnectionItem(connectionId: string): ContextTreeItem | undefined {
+        const entry = this.entries().find(entry => entry.connectionId === connectionId);
+        if (!entry) { return undefined; }
+        const item = this.scopeItem(entry);
+        item.label = 'Build Context';
+        return item;
+    }
 
     async getChildren(item?: ContextTreeItem): Promise<ContextTreeItem[]> {
         if (!item) {
@@ -145,8 +159,18 @@ export class BuildContextProvider implements vscode.TreeDataProvider<ContextTree
             detail: 'The server chooses a value when the operation starts.',
             iconPath: new vscode.ThemeIcon('settings-gear')
         }];
+        const recent = fresh.options.length < 5 ? [] : entry.client.contexts.recentOptions(entry.scope, fresh.id)
+            .flatMap(id => {
+                const option = fresh.options.find(option => option.id === id && option.availability !== false);
+                return option ? [option] : [];
+            });
+        const groups = contextOptionGroups(fresh.options);
+        if (recent.length) {
+            if (!groups[0]?.label && groups.length) { groups[0].label = 'All options'; }
+            groups.unshift({ label: 'Recent', options: recent });
+        }
         const choices: ContextPickItem[] = [...automatic];
-        for (const group of contextOptionGroups(fresh.options)) {
+        for (const group of groups) {
             if (group.label) { choices.push({ label: group.label, kind: vscode.QuickPickItemKind.Separator }); }
             choices.push(...group.options.map(option => {
                 const { icon, ...presentation } = contextOptionPresentation(option);
@@ -163,6 +187,10 @@ export class BuildContextProvider implements vscode.TreeDataProvider<ContextTree
             void vscode.window.showInformationMessage(chosen.option.reason ?? 'This option is unavailable'); return false;
         }
         const result = await entry.client.contexts.choose(entry.scope, fresh.id, chosen.option?.id, current.dimensions, token);
+        if (chosen.option) {
+            try { await entry.client.contexts.rememberOption(entry.scope, fresh.id, chosen.option.id); }
+            catch (error) { logError('Failed to save recent configuration choices', error); }
+        }
         onChanged?.(result);
         const root = this.scopeItems.get(this.scopeKey(entry));
         if (root?.entry.client === entry.client) {

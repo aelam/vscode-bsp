@@ -131,8 +131,9 @@ for project selection and connection details.
    Discovery reads `.bsp/*.json` at each workspace folder's root.
 2. The extension discovers and connects to servers on activation.
    If needed, run **BSP: Connect BSP Servers** from the Command Palette.
-3. Run **BSP: Show Build Targets** to open **BSP Targets** in Explorer.
-   For servers with the configuration extension, use **BSP Contexts**.
+3. Run **BSP: Show Build Targets** to open **BSP** in Explorer.
+   Expand a server to browse **Targets** and **Dependencies**.
+   Servers with the configuration extension also show **Build Context** first.
    Servers without this extension use their default execution settings.
    Use the target's compile, test, run, or debug action, as supported.
    See [Commands](#commands) for the Command Palette entries.
@@ -199,7 +200,7 @@ Run `npm run test:protocol` to check progress, cancellation, diagnostics, and ou
 The native VS Code **Testing** panel lists test targets from connected BSP servers.
 Use **Run Tests** to run a target, or run all targets from the panel toolbar.
 The **BSP: Build and Test Target** command also publishes results to this panel.
-Execution settings inherit the workspace Contexts choices. Without the context
+Execution settings inherit the workspace Build Context choices. Without the context
 extension, the server uses its default execution settings.
 The Stop button cancels the corresponding BSP request.
 
@@ -260,9 +261,9 @@ for the optional metadata and payloads.
 
 ### Debug a test target
 
-In **BSP Targets**, click the **Build and Debug Target** icon beside a test target.
+In **BSP**, click the **Build and Debug Target** icon beside a test target.
 The command is also available as **BSP: Debug Tests** in the Command Palette.
-It uses the Contexts selection when supported, or the server defaults. The server must
+It uses the Build Context selection when supported, or the server defaults. The server must
 advertise both `canTest` and `canDebug`. The client requests `debugSession/start`
 and connects to the returned DAP endpoint.
 
@@ -296,10 +297,14 @@ The extension automatically activates when a workspace root contains a `.bsp`
 directory, even if Git or search settings exclude it. Project sources can live in
 subfolders. Activation does not depend on a language extension.
 
-### BSP Targets View
+### BSP View
 
-- The "BSP Targets" view appears in the Explorer panel
-- Displays all discoverable build targets with their capabilities
+- The "BSP" view appears in the Explorer panel
+- Groups each server's entries into **Build Context**, **Favorites**, **Targets**, and **Dependencies**.
+- **Favorites** appears when the server has saved targets. Favorites are stored separately for each workspace and BSP configuration.
+- **Build Context** appears only when the server supports the configuration extension. Its fields load when expanded.
+- **Targets** contains targets without the standard `dependency` tag. **Dependencies** contains targets with that tag and is collapsed by default.
+- Both groups retain every target, including test targets from dependency packages. Grouping preserves server order, and action availability follows capabilities.
 - Shows target metadata including:
   - Dependencies
   - Supported languages
@@ -310,7 +315,7 @@ subfolders. Activation does not depend on a language extension.
 - **BSP: Connect BSP Servers** - Connect to servers; discover configurations first if none are known
 - **BSP: Discover BSP Connections** - Discover configurations added after activation
 - **BSP: Refresh Build Targets** - Refresh the build targets view
-- **BSP: Show Build Targets** - Focus on the BSP Targets view
+- **BSP: Show Build Targets** - Focus on the BSP view
 - **BSP: Compile Target with the Selected Build Settings** - Compile the selected build target
 - **BSP: Build and Test Target** - Build and run tests for the selected target
 - **BSP: Build and Run Target** - Build and run the selected target
@@ -484,7 +489,7 @@ change the language server's indexing configuration.
 
 ### Configuration UI
 
-The **BSP Contexts** view shows one workspace scope for each connected BSP server.
+The **Build Context** section under each server in the **BSP** view shows its workspace configuration.
 Each scope contains the shared configuration dimensions. Select a dimension to choose an option. The client uses the order,
 labels, and options returned by the server. For Xcode workspace operations, the
 server shows Scheme, Configuration, and Destination from the first query. The
@@ -492,7 +497,7 @@ latter two remain disabled until a Scheme is selected. Selecting an operation
 is not a prerequisite for loading the Scheme list. SwiftPM supplies
 its own dimensions without an Xcode scheme.
 
-Edit configuration in **BSP Contexts**. The target menu keeps its compile, run,
+Edit configuration in **Build Context**. The target menu keeps its compile, run,
 test, and debug actions without a separate configuration entry. Buttons
 use the server's available operations and the target's standard capabilities.
 Clicking a button supplies the operation for resolution. Target operations inherit the workspace choices for dimensions that both scopes
@@ -501,6 +506,11 @@ shared choices are rejected instead of falling back to target defaults. Internal
 target-only choices remain separate for each connection. Shared preferences apply
 to every operation. Saved operation overrides from earlier versions are ignored.
 Only explicit preferences are saved; resolved context IDs remain tied to the current server session.
+
+Pickers with at least five server options show a **Recent** section after a choice is saved.
+It contains up to five valid recent choices, newest first. History is stored separately
+for each connection, workspace or target scope, and configuration field. Smaller lists keep their existing layout.
+The complete option list and destination groups remain below Recent.
 
 Option pickers highlight the current choice. Moving the highlight does not save
 a choice; confirm an item to apply it. Optional fields offer **Automatic**, which
@@ -523,7 +533,7 @@ dimension order. It does not query every other connection again. Refreshing the 
 updating targets reloads the options, and execution still validates current
 options before it resolves a context.
 
-**Without Building** actions appear in Target and Contexts scope menus when the
+**Without Building** actions appear in Target and Build Context menus when the
 server advertises `"reuse"` in `buildPolicies`. The client resolves with
 `buildPolicy: "reuse"` and requires the response to explicitly confirm `"reuse"`.
 A missing or different response policy blocks execution, with no fallback build.
