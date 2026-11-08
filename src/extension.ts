@@ -12,6 +12,8 @@ import { MultiBspProvider } from './multiBspProvider';
 import { BspDebugConfigurationProvider, BspDebugAdapterDescriptorFactory } from './debugProvider';
 import { revealBuildOutput } from './outputPaths';
 import { cleanBuildCache } from './cleanCache';
+import { BspTaskProvider } from './bspTaskProvider';
+import { BspTargetResolver } from './bspTargetResolver';
 import { initializeBuildLogger, initializeLogger, showBuildOutput, log, logError, logInfo } from './logger';
 import * as path from 'path';
 
@@ -341,35 +343,6 @@ async function navigateToTargetFolder(item?: NavigateFolderItem): Promise<void> 
     );
 }
 
-async function prepareDebugConfiguration(
-    folder: vscode.WorkspaceFolder | undefined,
-    token: vscode.CancellationToken | undefined
-): Promise<vscode.DebugConfiguration | undefined> {
-    const connections = connectionManager?.getConnectedClients() ?? [];
-    const clients = connections.filter(connection =>
-        !folder || connection.config.workspaceUri.toString() === folder.uri.toString()
-    ).map(connection => ({ client: connection.client, label: connection.config.displayName ?? connection.config.name }));
-    if (!connections.length && bspClient?.connected
-        && (!folder || folder.uri.toString() === vscode.workspace.workspaceFolders?.[0]?.uri.toString())) {
-        clients.push({ client: bspClient, label: 'BSP' });
-    }
-    const choices: Array<vscode.QuickPickItem & { client: BspClient; target: BuildTarget }> = [];
-    for (const { client, label } of clients) {
-        const targets = await client.getBuildTargets();
-        if (token?.isCancellationRequested) { return undefined; }
-        for (const target of targets.filter(target => target.capabilities.canDebug)) {
-            choices.push({ label: target.displayName ?? target.id.uri, description: label,
-                detail: target.id.uri, client, target });
-        }
-    }
-    if (!choices.length) { throw new Error('No debuggable BSP targets. Connect to a build server first.'); }
-    const selected = choices.length === 1 ? choices[0] : await vscode.window.showQuickPick(
-        choices, { placeHolder: 'Select a build target to debug' }, token
-    );
-    if (!selected || token?.isCancellationRequested) { return undefined; }
-    return selected.client.prepareDebugConfiguration(selected.target, token);
-}
-
 export async function activate(context: vscode.ExtensionContext) {
     // Create output channels
     outputChannel = vscode.window.createOutputChannel('vscode-bsp', { log: true });
@@ -478,8 +451,12 @@ async function initializeBspExtension(context: vscode.ExtensionContext) {
     context.subscriptions.push(new BspStatusBar(connectionManager, bspClient));
     context.subscriptions.push(new BspTesting(connectionManager, bspClient, [sourcekitTestDiscovery]));
 
-    // F5 requests a new DAP endpoint before VS Code starts the adapter.
-    const debugConfigProvider = new BspDebugConfigurationProvider(prepareDebugConfiguration);
+    const resolver = new BspTargetResolver(connectionManager, bspClient, workspaceFolders[0]);
+    const taskProvider = new BspTaskProvider(resolver);
+    context.subscriptions.push(taskProvider, vscode.tasks.registerTaskProvider('bsp', taskProvider));
+    const debugConfigProvider = new BspDebugConfigurationProvider(
+        (folder, token, options) => resolver.prepareDebug(options, folder, token)
+    );
     const debugAdapterFactory = new BspDebugAdapterDescriptorFactory();
 
     context.subscriptions.push(

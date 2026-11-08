@@ -14,7 +14,8 @@
     "workspaceContains:**/.bsp/*",
     "onCommand:bsp.activate",
     "onDebugResolve:bsp-debug",
-    "onDebugInitialConfigurations"
+    "onDebugInitialConfigurations",
+    "onTaskType:bsp"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -29,7 +30,7 @@
           "default": [],
           "scope": "resource",
           "restricted": true,
-          "description": "LLDB commands to run before attaching or launching. Applies to F5 and target Debug actions when the server returns an LLDB adapter."
+          "description": "LLDB commands to run before attaching or launching. Applies to F5 and target Debug actions when the server identifies LLDB or returns no adapter type. The default is empty; launch.json initCommands overrides this setting."
         }
       }
     },
@@ -123,13 +124,29 @@
                 "type": "boolean",
                 "default": true,
                 "description": "Stop when the debugger attaches or launches."
+              },
+              "connection": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Path to a BSP connection JSON file, relative to the workspace folder or absolute. Required when target selection is ambiguous."
+              },
+              "target": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Exact BSP target URI or a unique target display name. Omit to use the current Build Context, or choose a target if no Context selection is saved."
+              },
+              "buildPolicy": {
+                "type": "string",
+                "enum": [
+                  "build",
+                  "reuse"
+                ],
+                "default": "build",
+                "description": "Build before execution, or reuse existing products. Reuse requires server support and is not valid for compile."
               }
             }
           },
           "attach": {
-            "required": [
-              "connect"
-            ],
             "properties": {
               "initCommands": {
                 "type": "array",
@@ -175,12 +192,22 @@
               "pid": {
                 "type": "integer",
                 "minimum": 1,
-                "description": "Process ID supplied by the build server."
+                "description": "Optional process ID for the selected target. Omit to attach when exactly one matching process is running."
               },
               "stopOnEntry": {
                 "type": "boolean",
                 "default": true,
                 "description": "Stop when the debugger attaches or launches."
+              },
+              "connection": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Path to a BSP connection JSON file, relative to the workspace folder or absolute. Required when target selection is ambiguous."
+              },
+              "target": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Exact BSP target URI or a unique target display name. Omit to use the current Build Context, or choose a target if no Context selection is saved."
               }
             }
           }
@@ -191,6 +218,11 @@
             "type": "bsp-debug",
             "request": "launch",
             "stopOnEntry": true
+          },
+          {
+            "name": "BSP Attach",
+            "type": "bsp-debug",
+            "request": "attach"
           }
         ],
         "configurationSnippets": [
@@ -202,6 +234,15 @@
               "type": "bsp-debug",
               "request": "launch",
               "stopOnEntry": true
+            }
+          },
+          {
+            "label": "BSP Attach",
+            "description": "Attach to a running target through its build server.",
+            "body": {
+              "name": "BSP Attach",
+              "type": "bsp-debug",
+              "request": "attach"
             }
           }
         ]
@@ -226,7 +267,7 @@
       },
       {
         "command": "bsp.compile",
-        "title": "Compile Target\u2026",
+        "title": "Compile Target…",
         "shortTitle": "Compile Target",
         "category": "BSP",
         "icon": "$(rocket)"
@@ -275,7 +316,7 @@
       },
       {
         "command": "bsp.cleanCache",
-        "title": "Clean Build Cache\u2026",
+        "title": "Clean Build Cache…",
         "category": "BSP",
         "icon": "$(clear-all)"
       },
@@ -287,7 +328,7 @@
       },
       {
         "command": "bsp.revealTargetFolder",
-        "title": "Navigate to Folder\u2026",
+        "title": "Navigate to Folder…",
         "category": "BSP",
         "icon": "$(folder-opened)"
       },
@@ -397,7 +438,7 @@
       },
       {
         "command": "bsp.configureContext",
-        "title": "Configure Build Context\u2026",
+        "title": "Configure Build Context…",
         "category": "BSP",
         "icon": "$(settings-gear)",
         "shortTitle": "Configure Build Context"
@@ -698,7 +739,46 @@
           "when": "false"
         }
       ]
-    }
+    },
+    "taskDefinitions": [
+      {
+        "type": "bsp",
+        "required": [
+          "operation",
+          "target"
+        ],
+        "properties": {
+          "operation": {
+            "type": "string",
+            "enum": [
+              "compile",
+              "run",
+              "test"
+            ],
+            "description": "BSP operation to execute."
+          },
+          "connection": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Path to a BSP connection JSON file, relative to the workspace folder or absolute. Required when target selection is ambiguous."
+          },
+          "target": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Exact BSP target URI or a unique target display name."
+          },
+          "buildPolicy": {
+            "type": "string",
+            "enum": [
+              "build",
+              "reuse"
+            ],
+            "default": "build",
+            "description": "Build before execution, or reuse existing products. Reuse requires server support and is not valid for compile."
+          }
+        }
+      }
+    ]
   },
   "configuration": {
     "type": "object",
