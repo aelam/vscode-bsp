@@ -75,8 +75,14 @@ for (const transport of ['tcp', 'unix']) {
         const initialize = await backend.next();
         assert.equal(initialize.command, 'initialize');
         await writer.write({ type: 'response', seq: 80, request_seq: initialize.seq,
-            command: 'initialize', success: true, body: {} });
-        assert.equal((await client.next()).request_seq, 17);
+            command: 'initialize', success: true, body: { supportsRestartRequest: true } });
+        const initialized = await client.next();
+        assert.equal(initialized.request_seq, 17);
+        assert.equal(initialized.body.supportsRestartRequest, true);
+        await writer.write({ type: 'event', seq: 85, event: 'capabilities', body: {
+            capabilities: { supportsRestartRequest: true }
+        } });
+        assert.equal((await client.next()).body.capabilities.supportsRestartRequest, true);
 
         const attach = { type: 'request', seq: 21, command: 'attach', arguments: {
             pid: 42, bspAttach: true, bspOwner: '/workspace/.bsp/server.json', bspTarget: 'target://hello'

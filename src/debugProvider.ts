@@ -53,6 +53,10 @@ export class BspDebugConfigurationProvider implements vscode.DebugConfigurationP
         });
         if (!resolved || token?.isCancellationRequested) { return null; }
         const merged: vscode.DebugConfiguration = { ...config, ...resolved, name: config.name };
+        if (resolved.bspRestart) {
+            // Keep user options and the selected target, without the server's endpoint or process ID.
+            merged.bspRestart = { ...config, ...resolved.bspRestart, name: config.name };
+        }
         if (config.request === 'attach') {
             merged.request = 'attach';
             if (config.pid !== undefined) { merged.pid = config.pid; }
@@ -73,16 +77,38 @@ export class BspDebugConfigurationProvider implements vscode.DebugConfigurationP
     }
 }
 
-export class BspDebugAdapterDescriptorFactory implements vscode.DebugAdapterDescriptorFactory {
-    createDebugAdapterDescriptor(session: vscode.DebugSession): vscode.DebugAdapterDescriptor {
-        const connect = session.configuration.connect;
+export class BspDebugAdapterDescriptorFactory implements vscode.DebugAdapterDescriptorFactory, vscode.Disposable {
+    private restarting = new Map<string, { configuration: vscode.DebugConfiguration; source: string }>();
+
+    constructor(private provider?: BspDebugConfigurationProvider) {}
+
+    async createDebugAdapterDescriptor(session: vscode.DebugSession): Promise<vscode.DebugAdapterDescriptor> {
+        let configuration = session.configuration;
+        const previous = this.restarting.get(session.id);
+        this.restarting.delete(session.id);
+        // VS Code can restart a session without running the configuration provider again.
+        if (previous && previous.source === JSON.stringify(configuration.connect)) {
+            if (!this.provider || !previous.configuration.bspRestart) { throw new Error('Cannot prepare a new BSP debug session.'); }
+            const resolved = await this.provider.resolveDebugConfigurationWithSubstitutedVariables(
+                session.workspaceFolder, { ...previous.configuration.bspRestart, name: configuration.name }
+            );
+            if (!resolved) { throw new Error('BSP debug restart was cancelled.'); }
+            configuration = resolved;
+        }
+        const connect = configuration.connect;
+        const options = configuration.bspRestart ? {
+            configuration,
+            onRestart: () => { this.restarting.set(session.id, { configuration, source: JSON.stringify(session.configuration.connect) }); }
+        } : undefined;
         if (typeof connect?.socket === 'string' && connect.socket) {
-            return new vscode.DebugAdapterInlineImplementation(new BspDebugAdapter({ socket: connect.socket }));
+            return new vscode.DebugAdapterInlineImplementation(new BspDebugAdapter({ socket: connect.socket }, options));
         }
         if (typeof connect?.host === 'string' && connect.host
             && Number.isInteger(connect.port) && connect.port > 0 && connect.port <= 65535) {
-            return new vscode.DebugAdapterInlineImplementation(new BspDebugAdapter({ host: connect.host, port: connect.port }));
+            return new vscode.DebugAdapterInlineImplementation(new BspDebugAdapter({ host: connect.host, port: connect.port }, options));
         }
         throw new Error('No valid BSP debug address. Start BSP Debug to request a new debug session.');
     }
+
+    dispose(): void { this.restarting.clear(); }
 }

@@ -185,6 +185,7 @@ test('client connects task notifications to the request window and sends cancell
 
     session.customRequest = async () => { throw new Error('Cannot stop debugger'); };
     debug.activeDebugSession = session;
+    for (const listener of debugStarted) { listener(session); }
     client.connection.sendRequest = () => assert.fail('Must not run while stopping debug failed');
     await assert.rejects(client.run(target), /Cannot stop debugger/);
     assert.equal(client.operations.get(target.id.uri), undefined);
