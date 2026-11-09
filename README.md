@@ -264,16 +264,26 @@ Attach detaches and attaches again without asking the adapter to terminate the a
 The selected target, build policy, and explicit launch options are preserved.
 A manual `connect` configuration follows the adapter's restart capabilities.
 
+While Restart prepares a session, **Stop** or the BSP progress cancel action
+cancels preparation. A new preparation for the same session cancels the previous
+one. Deactivating the extension also cancels pending preparation. If a cancelled
+request returns an endpoint, the client attempts to disconnect it without launching
+or terminating the app. The target stays busy until the cancelled request finishes.
+
 This flow requires a server that waits for DAP `launch` or `attach` before acting
 on the app. Update sourcekit-bsp and reconnect when using this flow. No additional
 BSP method or extension payload is used. Process discovery belongs to the server;
 standard BSP and DAP do not define a generic process-list request.
 
-sourcekit-bsp supports Attach for iOS simulator apps and macOS executables,
-including SwiftPM. One matching process is selected automatically. If several
-processes match, set `pid` in the configuration. No match produces an error.
-Physical-device and test Attach are not supported; their existing Debug launch
-support is unchanged.
+sourcekit-bsp supports Attach for iOS simulator apps, physical iOS devices,
+and macOS executables, including SwiftPM. One matching process is selected
+automatically. If several processes match, set `pid` in the configuration.
+No match produces an error. Test Attach is not supported.
+
+Physical iOS Attach requires a matching local build product for debug symbols.
+The device must be paired, unlocked, and have Developer Mode enabled. Attach does
+not build, install, launch, or terminate the app. See the server's
+[debugging guide](https://github.com/aelam/sourcekit-bsp/blob/main/Docs/wiki/Build-Run-Test-Debug.md#debug).
 
 To debug tests, select one whole target with both `canTest` and `canDebug` and
 use **Debug Test Target** in Testing, or **BSP: Debug Tests**. Individual cases

@@ -1,4 +1,6 @@
 import * as vscode from 'vscode';
+import { CancellationTokenSource } from 'vscode-jsonrpc/node';
+import { disposeDebugEndpoint } from './debugEndpoint';
 import { TargetBusyError } from './bspTargetOperations';
 import { BspDebugAdapter } from './bspDebugAdapter';
 import { BspDebugOptions, validateTargetOptions } from './bspTargetResolver';
@@ -51,7 +53,11 @@ export class BspDebugConfigurationProvider implements vscode.DebugConfigurationP
             void vscode.window.showInformationMessage(error.message);
             return undefined;
         });
-        if (!resolved || token?.isCancellationRequested) { return null; }
+        if (!resolved) { return null; }
+        if (token?.isCancellationRequested) {
+            await disposeDebugEndpoint(resolved.connect);
+            return null;
+        }
         const merged: vscode.DebugConfiguration = { ...config, ...resolved, name: config.name };
         if (resolved.bspRestart) {
             // Keep user options and the selected target, without the server's endpoint or process ID.
@@ -77,38 +83,101 @@ export class BspDebugConfigurationProvider implements vscode.DebugConfigurationP
     }
 }
 
+interface DebugPreparation {
+    session: vscode.DebugSession;
+    cancellation: CancellationTokenSource;
+    finished: Promise<void>;
+    finish: () => void;
+}
+
 export class BspDebugAdapterDescriptorFactory implements vscode.DebugAdapterDescriptorFactory, vscode.Disposable {
     private restarting = new Map<string, { configuration: vscode.DebugConfiguration; source: string }>();
+    private preparations = new Map<string, DebugPreparation>();
+    private expectedTerminations = new WeakSet<vscode.DebugSession>();
+    private terminated: vscode.Disposable;
+    private disposed = false;
 
-    constructor(private provider?: BspDebugConfigurationProvider) {}
-
-    async createDebugAdapterDescriptor(session: vscode.DebugSession): Promise<vscode.DebugAdapterDescriptor> {
-        let configuration = session.configuration;
-        const previous = this.restarting.get(session.id);
-        this.restarting.delete(session.id);
-        // VS Code can restart a session without running the configuration provider again.
-        if (previous && previous.source === JSON.stringify(configuration.connect)) {
-            if (!this.provider || !previous.configuration.bspRestart) { throw new Error('Cannot prepare a new BSP debug session.'); }
-            const resolved = await this.provider.resolveDebugConfigurationWithSubstitutedVariables(
-                session.workspaceFolder, { ...previous.configuration.bspRestart, name: configuration.name }
-            );
-            if (!resolved) { throw new Error('BSP debug restart was cancelled.'); }
-            configuration = resolved;
-        }
-        const connect = configuration.connect;
-        const options = configuration.bspRestart ? {
-            configuration,
-            onRestart: () => { this.restarting.set(session.id, { configuration, source: JSON.stringify(session.configuration.connect) }); }
-        } : undefined;
-        if (typeof connect?.socket === 'string' && connect.socket) {
-            return new vscode.DebugAdapterInlineImplementation(new BspDebugAdapter({ socket: connect.socket }, options));
-        }
-        if (typeof connect?.host === 'string' && connect.host
-            && Number.isInteger(connect.port) && connect.port > 0 && connect.port <= 65535) {
-            return new vscode.DebugAdapterInlineImplementation(new BspDebugAdapter({ host: connect.host, port: connect.port }, options));
-        }
-        throw new Error('No valid BSP debug address. Start BSP Debug to request a new debug session.');
+    constructor(private provider?: BspDebugConfigurationProvider) {
+        this.terminated = vscode.debug.onDidTerminateDebugSession(session => {
+            // Restart ends the old adapter before VS Code requests the next descriptor.
+            if (this.expectedTerminations.delete(session)) { return; }
+            const preparation = this.preparations.get(session.id);
+            // A delayed event for the old session must not cancel its replacement.
+            if (preparation?.session !== session) { return; }
+            preparation.cancellation.cancel();
+            this.preparations.delete(session.id);
+            this.restarting.delete(session.id);
+        });
     }
 
-    dispose(): void { this.restarting.clear(); }
+    async createDebugAdapterDescriptor(session: vscode.DebugSession): Promise<vscode.DebugAdapterDescriptor> {
+        if (this.disposed) { throw new Error('BSP debug restart was cancelled.'); }
+        const superseded = this.preparations.get(session.id);
+        superseded?.cancellation.cancel();
+        let finish!: () => void;
+        const preparation: DebugPreparation = {
+            session, cancellation: new CancellationTokenSource(),
+            finished: new Promise<void>(resolve => { finish = resolve; }), finish: () => finish()
+        };
+        const token = preparation.cancellation.token;
+        this.preparations.set(session.id, preparation);
+        const previous = this.restarting.get(session.id);
+        let configuration = session.configuration;
+        let handedOff = false;
+        try {
+            // Let the old operation release its target before preparing another endpoint.
+            if (superseded) { await superseded.finished; }
+            if (token.isCancellationRequested) { throw new Error('BSP debug restart was cancelled.'); }
+            // VS Code can restart a session without running the configuration provider again.
+            if (previous && previous.source === JSON.stringify(configuration.connect)) {
+                if (!this.provider || !previous.configuration.bspRestart) { throw new Error('Cannot prepare a new BSP debug session.'); }
+                const resolved = await this.provider.resolveDebugConfigurationWithSubstitutedVariables(
+                    session.workspaceFolder, { ...previous.configuration.bspRestart, name: configuration.name }, token
+                );
+                if (!resolved) { throw new Error('BSP debug restart was cancelled.'); }
+                if (token.isCancellationRequested) {
+                    await disposeDebugEndpoint(resolved.connect);
+                    throw new Error('BSP debug restart was cancelled.');
+                }
+                configuration = resolved;
+            }
+            const connect = configuration.connect;
+            const options = configuration.bspRestart ? {
+                configuration,
+                onRestart: () => {
+                    if (this.disposed || this.preparations.get(session.id) !== preparation) { return; }
+                    this.expectedTerminations.add(session);
+                    this.restarting.set(session.id, { configuration, source: JSON.stringify(session.configuration.connect) });
+                }
+            } : undefined;
+            let adapter: BspDebugAdapter;
+            if (typeof connect?.socket === 'string' && connect.socket) {
+                adapter = new BspDebugAdapter({ socket: connect.socket }, options);
+            } else if (typeof connect?.host === 'string' && connect.host
+                && Number.isInteger(connect.port) && connect.port > 0 && connect.port <= 65535) {
+                adapter = new BspDebugAdapter({ host: connect.host, port: connect.port }, options);
+            } else {
+                throw new Error('No valid BSP debug address. Start BSP Debug to request a new debug session.');
+            }
+            this.restarting.delete(session.id);
+            const descriptor = new vscode.DebugAdapterInlineImplementation(adapter);
+            handedOff = true;
+            return descriptor;
+        } finally {
+            if (!handedOff && this.preparations.get(session.id) === preparation) {
+                this.preparations.delete(session.id);
+                this.restarting.delete(session.id);
+            }
+            preparation.cancellation.dispose();
+            preparation.finish();
+        }
+    }
+
+    dispose(): void {
+        this.disposed = true;
+        this.terminated.dispose();
+        for (const preparation of this.preparations.values()) { preparation.cancellation.cancel(); }
+        this.preparations.clear();
+        this.restarting.clear();
+    }
 }

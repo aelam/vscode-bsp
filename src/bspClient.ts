@@ -4,6 +4,7 @@ import { BspOperationOptions, BspTestEvent, BspTestOptions } from './bspTestEven
 import { testTaskMessage } from './bspTestReports';
 import * as vscode from 'vscode';
 import { debugConfiguration } from './debugConfiguration';
+import { disposeDebugEndpoint } from './debugEndpoint';
 import { 
     createMessageConnection, 
     MessageConnection, 
@@ -413,7 +414,7 @@ export class BspClient {
                 throw new Error('This build target does not support test debugging');
             }
             const result = await this.requestDebugSession(target, originId, cancellation);
-            if (cancellation.isCancellationRequested) { throw new Error('Debug cancelled'); }
+            if (cancellation.isCancellationRequested) { await this.cancelDebugResult(result); }
             this.operations.get(target.id.uri)?.report('Connecting debugger');
             const configuration = this.configurationForDebugResult(result, target.id.uri);
             if (testing) {
@@ -430,7 +431,8 @@ export class BspClient {
         request: 'launch' | 'attach' = 'launch'
     ): Promise<vscode.DebugConfiguration> {
         if (this.contexts.enabled) {
-            return this.executeContext('debug', { targets: [target.id] }, token, {}, false, [target], buildPolicy, undefined, request).then(result => {
+            return this.executeContext('debug', { targets: [target.id] }, token, {}, false, [target], buildPolicy, undefined, request).then(async result => {
+                if (token?.isCancellationRequested) { await this.cancelDebugResult(result as DebugSessionAddressResult); }
                 const configuration = this.configurationForDebugResult(result as DebugSessionAddressResult, target.id.uri, request, buildPolicy);
                 if (target.capabilities.canTest && !target.capabilities.canRun) { configuration.stopOnEntry = false; }
                 return configuration;
@@ -440,7 +442,7 @@ export class BspClient {
         return this.executeWithProgress('debug', target.id.uri, async (originId, cancellation) => {
             const testing = target.capabilities?.canTest === true && !target.capabilities.canRun;
             const result = await this.requestDebugSession(target, originId, cancellation, request);
-            if (cancellation.isCancellationRequested) { throw new Error('Debug cancelled'); }
+            if (cancellation.isCancellationRequested) { await this.cancelDebugResult(result); }
             const configuration = this.configurationForDebugResult(result, target.id.uri, request, buildPolicy);
             if (testing) { configuration.stopOnEntry = false; }
             return configuration;
@@ -452,10 +454,16 @@ export class BspClient {
     ): Promise<vscode.DebugConfiguration> {
         const result = await this.executeContext('debug', { targets: resolved.targets }, token,
             {}, false, [], resolved.buildPolicy ?? 'build', resolved, request);
+        if (token?.isCancellationRequested) { await this.cancelDebugResult(result as DebugSessionAddressResult); }
         const configuration = this.configurationForDebugResult(result as DebugSessionAddressResult, resolved.targets[0].uri, request, resolved.buildPolicy);
         if (resolved.targets.every(id => this.buildTargets.some(target => target.id.uri === id.uri
             && target.capabilities.canTest && !target.capabilities.canRun))) { configuration.stopOnEntry = false; }
         return configuration;
+    }
+
+    private async cancelDebugResult(result: DebugSessionAddressResult): Promise<never> {
+        await disposeDebugEndpoint(result.uri);
+        throw new Error('Debug cancelled');
     }
 
     private async requestDebugSession(
@@ -537,7 +545,7 @@ export class BspClient {
                     : { targets: resolved.targets, originId, ...(operation === 'test' ? options.selection : {}), executionContext };
                 if (operation === 'debug') {
                     const result = await this.connection.sendRequest<DebugSessionAddressResult>('debugSession/start', params, cancellation);
-                    if (cancellation.isCancellationRequested) { throw new Error('Debug cancelled'); }
+                    if (cancellation.isCancellationRequested) { await this.cancelDebugResult(result); }
                     if (startDebug) {
                         const configuration = this.configurationForDebugResult(result, resolved.targets[0].uri, debugRequest, buildPolicy);
                         const targets = resolved.targets.map(id =>
