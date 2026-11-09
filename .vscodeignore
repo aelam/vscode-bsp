@@ -1,0 +1,2 @@
+# Keep demo recordings out of the extension package.
+media/demos/*.mp4
