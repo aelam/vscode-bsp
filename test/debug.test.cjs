@@ -77,6 +77,12 @@ test('rejects invalid endpoints without falling back to port 5005', () => {
     for (const uri of ['tcp://localhost', 'tcp://localhost:0', 'tcp://localhost:70000', 'http://localhost:5005', 'unix:///']) {
         assert.throws(() => debugConfiguration({ uri }, 'Hello'));
     }
+    for (const [uri, category] of [
+        ['tcp://localhost', 'Invalid'], ['tcp://localhost:0', 'Invalid'],
+        ['http://localhost:5005', 'Unsupported'], ['unix:///', 'Unsupported']
+    ]) {
+        assert.throws(() => debugConfiguration({ uri }, 'Hello'), { message: `${category} BSP debug address: ${uri}` });
+    }
 });
 
 test('workspace LLDB commands reach target actions and F5 with launch overrides', async () => {
