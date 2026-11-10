@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>BSP · 原生侧栏交互演示</title>
+<style>
+:root{color-scheme:light dark;--bg:light-dark(#fff,#1f1f1f);--side:light-dark(#f5f5f5,#252526);--chrome:light-dark(#ececec,#323233);--fg:light-dark(#252526,#d4d4d4);--muted:light-dark(#656565,#a6a6a6);--line:light-dark(#ddd,#3d3d3d);--field:light-dark(#fff,#313131);--selection:light-dark(#e3effb,#094771);--hover:light-dark(#e8e8e8,#303033);--blue:light-dark(#0067a8,#4aabef);--accent:#007acc;--good:light-dark(#137c39,#88ce92);--bad:light-dark(#b12121,#f49393);--shadow:0 8px 30px #0004;font:13px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;background:var(--side);color:var(--fg)}
+*{box-sizing:border-box}body{margin:0;padding:20px}button,input{font:inherit}button{color:inherit;cursor:pointer}button:disabled{opacity:.42;cursor:default}button:focus-visible,input:focus-visible,summary:focus-visible{outline:2px solid var(--blue);outline-offset:-2px}button{border:1px solid var(--line);background:var(--field);padding:5px 9px;border-radius:3px}button:hover:not(:disabled){background:var(--hover)}[hidden]{display:none!important}strong{font-weight:600}.demo-note{max-width:1200px;margin:0 auto 12px;display:flex;align-items:center;flex-wrap:wrap;gap:8px}.demo-note span{color:var(--muted)}.demo-note button{margin-left:auto}.window{max-width:1200px;margin:auto;border:1px solid var(--line);border-radius:7px;overflow:hidden;background:var(--bg)}.titlebar{height:38px;background:var(--chrome);display:flex;align-items:center;justify-content:center;gap:12px;border-bottom:1px solid var(--line)}.workspace-title{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:90%}.layout{display:grid;grid-template-columns:326px minmax(0,1fr);min-height:720px}.sidebar{background:var(--side);border-right:1px solid var(--line);min-width:0}.sidebar-title{padding:13px 14px;display:flex;align-items:center;justify-content:space-between;letter-spacing:.4px}.connection{margin:0 12px 14px;width:calc(100% - 24px);display:flex;gap:8px;align-items:center;text-align:left}.connection span:first-child{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.view-header{padding:7px 12px;background:var(--hover);display:flex;align-items:center;justify-content:space-between;gap:6px;font-size:11px;font-weight:600;letter-spacing:.3px}.context-row{display:grid;grid-template-columns:16px 98px minmax(0,1fr) 10px;gap:5px;align-items:center;width:100%;border:0;border-radius:0;background:transparent;text-align:left;padding:8px 13px}.context-row:hover:not(:disabled){background:var(--hover)}.context-label{color:var(--muted)}.context-value{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.row-symbol{color:var(--muted);text-align:center}.context-row.current .context-value{font-weight:600}.host-row{padding:8px 13px;display:grid;grid-template-columns:16px 98px 1fr;gap:5px}.actions{display:flex;gap:5px;flex-wrap:wrap;padding:12px}.actions button{padding:5px 8px}.actions .primary,.primary{background:var(--accent);border-color:var(--accent);color:#fff}.actions .primary:hover:not(:disabled),.primary:hover:not(:disabled){background:#0968a6}.availability{padding:0 12px 12px;color:var(--muted);font-size:12px;min-height:30px}.group{margin:8px 0}.group summary{padding:5px 12px;font-weight:600;cursor:pointer;user-select:none}.group-title{color:var(--muted);font-size:12px;font-weight:400;margin-left:5px}.target-row{display:flex;align-items:center;padding-right:7px}.target-button{flex:1;display:flex;align-items:center;gap:8px;text-align:left;padding:5px 12px 5px 22px;border:0;border-radius:0;min-width:0;background:transparent}.target-button[aria-pressed="true"]{background:var(--selection)}.target-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}.kind{color:var(--muted);font-size:11px;white-space:nowrap}.star{border:0;background:transparent;padding:5px 7px}.all-targets{max-height:275px;overflow:auto}.browse{margin:0 12px 9px;width:calc(100% - 24px);text-align:left}.empty{padding:7px 22px;color:var(--muted)}.main{min-width:0;display:flex;flex-direction:column}.tabs{height:36px;background:var(--side);border-bottom:1px solid var(--line);display:flex}.tab{padding:8px 18px;border-top:2px solid var(--blue);background:var(--bg)}.editor{padding:28px;flex:1;min-height:370px}.eyebrow{font-size:12px;color:var(--muted);margin:0 0 5px}.editor h1{font-size:25px;margin:0 0 12px;font-weight:500;overflow-wrap:anywhere}.selection-summary{display:flex;flex-wrap:wrap;gap:6px 16px;color:var(--muted);margin-bottom:22px}.steps{margin:20px 0;padding-left:20px;color:var(--muted);max-width:600px}.steps li{padding:5px 0}.steps strong{color:var(--fg);font-weight:500}.callout{padding:12px 0;border-top:1px solid var(--line);color:var(--muted);max-width:630px}.task-box{margin-top:22px;padding:14px;border:1px solid var(--line);border-radius:4px}.task-head{display:flex;gap:12px;align-items:center;justify-content:space-between}.task-context{font-size:12px;color:var(--muted);margin-top:6px;overflow-wrap:anywhere}.task-phase{margin:8px 0}.task-box progress{display:block;width:100%;height:5px;accent-color:var(--accent)}.error{color:var(--bad)}.success{color:var(--good)}.output{border-top:1px solid var(--line)}.output-header{display:flex;justify-content:space-between;align-items:center;padding:8px 14px;font-size:11px}.output-header strong{border-bottom:1px solid var(--blue);padding-bottom:4px}.output-header button{font-size:11px;padding:2px 6px}.logs{height:190px;overflow:auto;padding:3px 14px 15px;font:12px/1.7 ui-monospace,SFMono-Regular,Consolas,monospace;overflow-wrap:anywhere}.log-line{white-space:pre-wrap}.log-time{color:var(--muted);margin-right:8px}.statusbar{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:5px 15px;background:var(--accent);color:#fff;padding:4px 12px;font-size:12px}.statusbar span{overflow-wrap:anywhere}.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+dialog{padding:0;background:var(--side);color:var(--fg);border:1px solid var(--line);border-radius:6px;box-shadow:var(--shadow);width:min(600px,calc(100vw - 24px));max-height:calc(100dvh - 48px);margin:10vh auto auto;overflow:hidden}dialog::backdrop{background:#0003}.picker-title{display:flex;align-items:center;justify-content:space-between;padding:9px 12px;font-size:12px}.picker-title button{border:0;background:transparent;padding:2px 8px}.picker-search{padding:0 10px 8px}.picker-search input{width:100%;padding:8px 10px;background:var(--field);color:var(--fg);border:1px solid var(--blue);border-radius:2px;outline-offset:0}.picker-results{max-height:min(410px,55dvh);overflow:auto;padding-bottom:4px}.option{padding:8px 12px;cursor:pointer;border-left:2px solid transparent}.option.selected{background:var(--selection);border-left-color:var(--blue)}.option-label{display:flex;align-items:center;gap:8px}.option-label strong{flex:1;font-weight:500}.option-detail{font-size:12px;color:var(--muted);margin-top:2px}.option-hint{font-size:11px;color:var(--muted)}.picker-footer{display:flex;justify-content:space-between;flex-wrap:wrap;gap:7px;padding:7px 12px;color:var(--muted);font-size:11px;border-top:1px solid var(--line)}
+@media(max-width:760px){body{padding:10px}.layout{grid-template-columns:295px minmax(0,1fr)}.editor{padding:18px}.steps{padding-left:16px}.kind{display:none}}
+@media(max-width:600px){.layout{grid-template-columns:1fr}.sidebar{border-right:0}.editor{min-height:auto}.main{border-top:1px solid var(--line)}.all-targets{max-height:200px}.demo-note{font-size:12px}.titlebar{justify-content:flex-start;padding:0 12px}.kind{display:block}dialog{margin-top:24px}.context-row{grid-template-columns:16px 98px minmax(0,1fr) 10px}.logs{height:180px}}
+@media(pointer:coarse){button,.context-row,.target-button,.option{min-height:40px}input{font-size:16px!important}}
+@media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important}}
+</style>
+</head>
+<body>
+<div class="demo-note"><strong>BSP 交互测试页</strong><span>模拟原生 TreeView + QuickPick · 示例数据 · 不执行真实构建</span><button id="reset" type="button">恢复初始状态</button></div>
+<div class="window">
+  <div class="titlebar"><span class="workspace-title" id="window-title">HelloWorkspace — BSP UI Demo</span></div>
+  <div class="layout">
+    <aside class="sidebar" aria-label="BSP 侧栏">
+      <div class="sidebar-title"><strong>BSP</strong><span id="target-count" class="kind"></span></div>
+      <button class="connection" id="connection" type="button" aria-label="切换 BSP 连接"><span id="connection-label"></span><span aria-hidden="true">⌄</span></button>
+      <div class="view-header"><span>⌄ 当前构建</span><span id="context-kind"></span></div>
+      <button class="context-row current" id="choose-target" type="button"><span class="row-symbol" aria-hidden="true">◇</span><span class="context-label">Target</span><span class="context-value" id="value-target"></span><span aria-hidden="true">›</span></button>
+      <button class="context-row" id="choose-scheme" type="button"><span class="row-symbol" aria-hidden="true">◈</span><span class="context-label">Scheme</span><span class="context-value" id="value-scheme"></span><span aria-hidden="true">›</span></button>
+      <button class="context-row" id="choose-configuration" type="button"><span class="row-symbol" aria-hidden="true">⚙</span><span class="context-label">Configuration</span><span class="context-value" id="value-configuration"></span><span aria-hidden="true">›</span></button>
+      <button class="context-row" id="choose-destination" type="button"><span class="row-symbol" aria-hidden="true">▣</span><span class="context-label">Destination</span><span class="context-value" id="value-destination"></span><span aria-hidden="true">›</span></button>
+      <div id="host-destination" class="host-row" hidden><span class="row-symbol" aria-hidden="true">▣</span><span class="context-label">Destination</span><span>本机</span></div>
+      <div class="actions"><button type="button" class="primary" data-operation="compile">编译</button><button type="button" data-operation="run">运行</button><button type="button" data-operation="test">测试</button><button type="button" data-operation="debug">调试</button><button type="button" data-operation="buildDebug">构建并调试</button></div>
+      <div id="availability" class="availability"></div>
+      <div class="view-header">⌄ 目标</div>
+      <details class="group" open><summary>收藏 <span class="group-title" id="favorite-count"></span></summary><div id="favorites"></div></details>
+      <details class="group" open><summary>最近使用</summary><div id="recents"></div></details>
+      <details class="group"><summary>全部目标 <span class="group-title" id="all-count"></span></summary><button id="search-targets" type="button" class="browse">搜索所有 targets…</button><div class="all-targets" id="all-targets"></div></details>
+    </aside>
+    <main class="main">
+      <div class="tabs"><div class="tab">BSP Demo</div></div>
+      <section class="editor" aria-label="交互演示">
+        <p class="eyebrow" id="workspace-summary"></p><h1 id="active-name"></h1><div class="selection-summary" id="selection-summary"></div>
+        <ol class="steps"><li>点击左侧 <strong>Target</strong>，搜索 <strong>Shop</strong> 或 <strong>Tests</strong>。</li><li>点击 <strong>Scheme / Configuration / Destination</strong>，输入文字过滤选项。</li><li>切到其他 target 再回来，检查刚才的选择是否恢复。</li><li>点击 <strong>构建并调试</strong>，执行期间切换目标，观察任务仍使用原来的配置。</li><li>切换到 <strong>SwiftPM</strong>，查看同一套 UI 如何隐藏 Scheme。</li></ol>
+        <div class="callout">选项列表支持 ↑ ↓、Enter 和 Esc。收藏与配置仅保存在当前浏览器中。</div>
+        <section class="task-box" aria-label="当前目标任务"><div class="task-head"><strong id="task-title">尚无任务</strong><button id="cancel-task" type="button" hidden>取消任务</button></div><div class="task-context" id="task-context"></div><div class="task-phase" id="task-phase"></div><progress id="task-progress" max="100" value="0" hidden></progress></section>
+      </section>
+      <section class="output" aria-label="输出"><div class="output-header"><strong>OUTPUT · BSP</strong><button id="clear-output" type="button">清空</button></div><div class="logs" id="logs" role="log" aria-live="polite"></div></section>
+    </main>
+  </div>
+  <footer class="statusbar"><span id="status-context"></span><span id="status-tasks">就绪 · 所有操作均为模拟</span></footer>
+</div>
+<dialog id="quick-pick" aria-labelledby="picker-heading">
+  <div class="picker-title"><strong id="picker-heading"></strong><button id="close-picker" type="button" aria-label="关闭选择框">×</button></div>
+  <div class="picker-search"><label class="sr-only" for="picker-input">筛选选项</label><input id="picker-input" type="text" autocomplete="off" role="combobox" aria-autocomplete="list" aria-expanded="true" aria-controls="picker-results"></div>
+  <div id="picker-results" class="picker-results" role="listbox" aria-label="可选项"></div>
+  <div class="picker-footer"><span id="picker-count" aria-live="polite"></span><span>↑ ↓ 选择 · Enter 确认 · Esc 关闭</span></div>
+</dialog>
+<script>
+(() => {
+  'use strict';
+  const $ = id => document.getElementById(id);
+  const storageKey = 'vscode-bsp-native-ui-demo-v1';
+  const connections = {
+    xcode: {label:'HelloWorkspace · Xcode', description:'327 个目标 · 应用、测试与依赖库', defaultTarget:'hello'},
+    swiftpm: {label:'DemoPackage · SwiftPM', description:'20 个目标 · 本机编译与运行', defaultTarget:'cli'}
+  };
+  const target = (id,name,kind) => ({id,name,kind});
+  const modules = ['Shop','Account','Chat','Media','Search','Storage','Payments','Sync','Settings','Contacts','Notifications'];
+  const targets = {
+    xcode:[target('hello','Hello','app'),target('hello-tests','HelloTests','test'),target('shop','ShopCore','library'),target('shop-tests','ShopTests','test'),target('network','NetworkKit','library'),target('greeting','GreetingSupport','library'),...Array.from({length:321},(_,i)=>target('feature-'+i,modules[i%modules.length]+(i%4===0?'Tests':'Feature')+String(i+1).padStart(3,'0'),i%4===0?'test':'library'))],
+    swiftpm:[target('cli','hello-cli','app'),target('tests','HelloTests','test'),target('greeting','GreetingSupport','library'),...Array.from({length:17},(_,i)=>target('support-'+i,'SupportModule'+(i+1),'library'))]
+  };
+  const destinations=[{id:'simulator',label:'iPhone 16 · iOS 模拟器',description:'可编译、运行、测试和调试'},{id:'device',label:'开发用 iPhone · 真机',description:'示例设备已连接'},{id:'generic',label:'Generic iOS Simulator',description:'仅编译，不支持启动应用或执行测试'}];
+  const operationNames={compile:'编译',run:'运行',test:'测试',debug:'调试',buildDebug:'构建并调试'};
+  const kindNames={app:'应用',test:'测试',library:'库'};
+  const initialState=()=>({version:1,connection:'xcode',active:{xcode:'hello',swiftpm:'cli'},favorites:{xcode:['hello','hello-tests','shop'],swiftpm:['cli','tests']},recents:{xcode:['network','greeting'],swiftpm:['greeting']},selections:{}});
+  let state=initialState();
+  const running=new Map(), history=new Map(), products=new Set();
+  let picker=null, matches=[], highlight=0, restoreFocus=null;
+  const validId=(connection,id)=>targets[connection].some(item=>item.id===id);
+  try {
+    const saved=JSON.parse(localStorage.getItem(storageKey)||'null');
+    if(saved?.version===1 && connections[saved.connection] && saved.active && saved.favorites && saved.recents && saved.selections && typeof saved.selections==='object' && Object.keys(connections).every(c=>validId(c,saved.active[c]) && Array.isArray(saved.favorites[c]) && Array.isArray(saved.recents[c]))) {
+      state=saved;
+      for(const c of Object.keys(connections)) {state.favorites[c]=[...new Set(state.favorites[c])].filter(id=>validId(c,id));state.recents[c]=[...new Set(state.recents[c])].filter(id=>validId(c,id)).slice(0,5);}
+    }
+  } catch {}
+  const save=()=>{try{localStorage.setItem(storageKey,JSON.stringify(state));}catch{}};
+  const active=()=>targets[state.connection].find(item=>item.id===state.active[state.connection]);
+  const scopeKey=()=>state.connection+':'+active().id;
+  function schemes(item=active()) {
+    const base=item.name.includes('Shop')?'Shop':item.id==='hello-tests'?'Hello':item.name;
+    return [{id:'main',label:base,description:'默认开发方案',configuration:'Debug'},{id:'staging',label:base+'-Staging',description:'预发布方案 · 默认配置为 Staging',configuration:'Staging'}];
+  }
+  function selection() {
+    const key=scopeKey();
+    const raw=state.selections[key];
+    const value=raw && typeof raw==='object'?raw:{};
+    value.scheme=['main','staging'].includes(value.scheme)?value.scheme:'main';
+    value.configuration=['default','Debug','Release'].includes(value.configuration)?value.configuration:'default';
+    value.destination=state.connection==='swiftpm'?'host':destinations.some(d=>d.id===value.destination)?value.destination:'simulator';
+    state.selections[key]=value;
+    return value;
+  }
+  function context() {
+    const item=active(), value=selection(), isXcode=state.connection==='xcode';
+    const scheme=isXcode?schemes(item).find(s=>s.id===value.scheme):null;
+    const configuration=value.configuration==='default'?(scheme?.configuration||'Debug'):value.configuration;
+    const destination=isXcode?destinations.find(d=>d.id===value.destination):{id:'host',label:'本机'};
+    return {connection:state.connection,targetId:item.id,targetName:item.name,kind:item.kind,schemeId:scheme?.id||null,schemeName:scheme?.label||null,configuration,destinationId:destination.id,destinationName:destination.label};
+  }
+  const contextText=c=>[connections[c.connection].label,c.targetName,c.schemeName,c.configuration,c.destinationName].filter(Boolean).join(' · ');
+  const productKey=c=>JSON.stringify([c.connection,c.targetId,c.schemeId,c.configuration,c.destinationId]);
+  function availability(action,c=context()) {
+    if(running.has(c.connection+':'+c.targetId))return '该目标正在执行操作';
+    if(action==='compile')return '';
+    if(c.kind==='library')return '库目标只支持编译，请选择应用或测试目标';
+    if(c.destinationId==='generic')return '当前 destination 仅支持编译';
+    if(action==='run' && c.kind!=='app')return '请选择应用目标';
+    if(action==='test' && c.kind!=='test')return '请选择测试目标';
+    return '';
+  }
+  function log(message,level='info') {
+    const line=document.createElement('div');line.className='log-line '+(level==='error'?'error':level==='success'?'success':'');
+    const time=document.createElement('span');time.className='log-time';time.textContent=new Date().toLocaleTimeString('zh-CN',{hour12:false});
+    line.append(time,document.createTextNode(message));$('logs').append(line);
+    while($('logs').childElementCount>100)$('logs').firstElementChild.remove();
+    $('logs').scrollTop=$('logs').scrollHeight;
+  }
+  function activate(id) {
+    const previous=state.active[state.connection];
+    state.active[state.connection]=id;
+    state.recents[state.connection]=[previous,...state.recents[state.connection]].filter((value,index,list)=>value!==id && list.indexOf(value)===index).slice(0,5);
+    render();save();
+  }
+  function row(item) {
+    const container=document.createElement('div');container.className='target-row';
+    const button=document.createElement('button');button.type='button';button.className='target-button';button.dataset.target=item.id;button.setAttribute('aria-pressed',String(item.id===active().id));
+    const name=document.createElement('span');name.className='target-name';name.textContent=item.name;
+    const kind=document.createElement('span');kind.className='kind';kind.textContent=kindNames[item.kind];
+    button.append(name,kind);button.addEventListener('click',()=>activate(item.id));
+    const star=document.createElement('button');star.type='button';star.className='star';
+    const pinned=state.favorites[state.connection].includes(item.id);star.textContent=pinned?'★':'☆';star.setAttribute('aria-label',(pinned?'取消收藏 ':'收藏 ')+item.name);
+    star.addEventListener('click',()=>{const list=state.favorites[state.connection];state.favorites[state.connection]=pinned?list.filter(id=>id!==item.id):[...list,item.id];render();save();});
+    container.append(button,star);return container;
+  }
+  function renderTargets(id,items) {
+    const container=$(id);container.replaceChildren(...items.map(row));
+    if(!items.length){const empty=document.createElement('div');empty.className='empty';empty.textContent='暂无';container.append(empty);}
+  }
+  function renderTask() {
+    const task=running.get(scopeKey())||history.get(scopeKey());
+    $('task-title').className=task?.status==='error'?'error':task?.status==='success'?'success':'';
+    $('task-title').textContent=task?task.title:'尚无任务';$('task-context').textContent=task?contextText(task.context):'';$('task-phase').textContent=task?.phase||'可以先编译，再尝试运行或调试。';
+    $('cancel-task').hidden=!running.has(scopeKey());$('task-progress').hidden=!task||task.status!=='running';$('task-progress').value=task?.progress||0;
+    $('status-tasks').textContent=running.size?running.size+' 个模拟任务进行中':'就绪 · 所有操作均为模拟';
+    for(const button of document.querySelectorAll('[data-operation]')){const reason=availability(button.dataset.operation);button.disabled=Boolean(reason);button.title=reason||operationNames[button.dataset.operation];}
+  }
+  function render() {
+    const c=context(),value=selection(),isXcode=state.connection==='xcode';
+    $('connection-label').textContent=connections[state.connection].label;$('window-title').textContent=connections[state.connection].label+' — BSP UI Demo';
+    $('target-count').textContent=targets[state.connection].length+' targets';$('context-kind').textContent=kindNames[c.kind];
+    $('value-target').textContent=c.targetName;$('value-scheme').textContent=c.schemeName||'';$('value-configuration').textContent=value.configuration==='default'?(isXcode?'Scheme Default':'Default')+' → '+c.configuration:c.configuration;
+    $('value-destination').textContent=c.destinationName;$('choose-scheme').hidden=!isXcode;$('choose-destination').hidden=!isXcode;$('host-destination').hidden=isXcode;
+    $('active-name').textContent=c.targetName;$('workspace-summary').textContent=connections[state.connection].label+' / '+kindNames[c.kind];
+    $('selection-summary').replaceChildren(...[c.schemeName,c.configuration,c.destinationName].filter(Boolean).map(text=>{const node=document.createElement('span');node.textContent=text;return node;}));
+    $('status-context').textContent=c.targetName+' · '+c.configuration+' · '+c.destinationName;
+    $('availability').textContent=c.destinationId==='generic'?'当前 destination 仅支持编译。':c.kind==='library'?'库目标可编译。运行或调试请选择应用 / 测试目标。':'操作使用当前目标的配置；切换目标会恢复上次选择。';
+    const list=targets[state.connection];renderTargets('favorites',state.favorites[state.connection].map(id=>list.find(t=>t.id===id)).filter(Boolean));
+    renderTargets('recents',state.recents[state.connection].filter(id=>!state.favorites[state.connection].includes(id)).map(id=>list.find(t=>t.id===id)).filter(Boolean));
+    renderTargets('all-targets',list);$('favorite-count').textContent=state.favorites[state.connection].length;$('all-count').textContent=list.length;renderTask();
+  }
+  function fuzzy(text,query) {
+    const source=text.toLowerCase(), words=query.toLowerCase().trim().split(/\s+/).filter(Boolean);
+    return words.every(word=>{let offset=0;for(const char of word){const next=source.indexOf(char,offset);if(next<0)return false;offset=next+1;}return true;});
+  }
+  function openPicker(kind,trigger) {
+    const value=selection();restoreFocus=trigger;
+    if(kind==='connection')picker={title:'选择 BSP 连接',placeholder:'搜索工程或构建系统',value:state.connection,items:Object.entries(connections).map(([id,c])=>({id,label:c.label,description:c.description})),select:id=>{state.connection=id;render();save();}};
+    if(kind==='target'){
+      const rank=id=>id===active().id?-3:state.favorites[state.connection].includes(id)?-2:state.recents[state.connection].includes(id)?-1:0;
+      picker={title:'选择 Target',placeholder:'搜索 '+targets[state.connection].length+' 个目标，如 Shop、Tests…',value:active().id,items:targets[state.connection].slice().sort((a,b)=>rank(a.id)-rank(b.id)||a.name.localeCompare(b.name)).map(t=>({id:t.id,label:t.name,description:kindNames[t.kind],hint:state.favorites[state.connection].includes(t.id)?'收藏':state.recents[state.connection].includes(t.id)?'最近使用':''})),select:activate};
+    }
+    if(kind==='scheme')picker={title:'选择 Scheme',placeholder:'搜索 Scheme',value:value.scheme,items:schemes(),select:id=>{selection().scheme=id;render();save();}};
+    if(kind==='configuration')picker={title:'选择 Configuration',placeholder:'搜索构建配置',value:value.configuration,items:[{id:'default',label:state.connection==='xcode'?'Scheme Default':'Default',description:state.connection==='xcode'?'使用当前 Scheme 的默认配置':'使用 SwiftPM 默认 Debug 配置'},{id:'Debug',label:'Debug',description:'明确使用 Debug'},{id:'Release',label:'Release',description:'明确使用 Release'}],select:id=>{selection().configuration=id;render();save();}};
+    if(kind==='destination')picker={title:'选择 Destination',placeholder:'搜索设备或平台',value:value.destination,items:destinations,select:id=>{selection().destination=id;render();save();}};
+    if(!picker)return;
+    $('picker-heading').textContent=picker.title;$('picker-input').placeholder=picker.placeholder;$('picker-input').value='';$('quick-pick').showModal();renderPicker();$('picker-input').focus();
+  }
+  function renderPicker() {
+    matches=picker.items.filter(item=>fuzzy(item.label+' '+(item.description||''),$('picker-input').value));highlight=0;
+    const fragment=document.createDocumentFragment();
+    matches.forEach((item,index)=>{const option=document.createElement('div');option.className='option';option.id='picker-option-'+index;option.dataset.id=item.id;option.setAttribute('role','option');
+      const label=document.createElement('div');label.className='option-label';const name=document.createElement('strong');name.textContent=item.label;label.append(name);
+      const hint=document.createElement('span');hint.className='option-hint';hint.textContent=item.id===picker.value?'当前':item.hint||'';label.append(hint);option.append(label);
+      if(item.description){const description=document.createElement('div');description.className='option-detail';description.textContent=item.description;option.append(description);}
+      option.addEventListener('click',()=>confirmPick(index));fragment.append(option);
+    });
+    if(!matches.length){const empty=document.createElement('div');empty.className='empty';empty.textContent='没有匹配项';fragment.append(empty);}
+    $('picker-results').replaceChildren(fragment);$('picker-count').textContent=matches.length+' 个结果';$('picker-results').scrollTop=0;highlightOption();
+  }
+  function highlightOption() {
+    const rows=$('picker-results').querySelectorAll('[role="option"]');
+    rows.forEach((row,index)=>{row.classList.toggle('selected',index===highlight);row.setAttribute('aria-selected',String(index===highlight));});
+    if(rows[highlight]){$('picker-input').setAttribute('aria-activedescendant',rows[highlight].id);rows[highlight].scrollIntoView({block:'nearest'});}else $('picker-input').removeAttribute('aria-activedescendant');
+  }
+  function confirmPick(index=highlight) {if(!picker||!matches[index])return;const choose=picker.select,id=matches[index].id;$('quick-pick').close();picker=null;choose(id);}
+  $('picker-input').addEventListener('input',renderPicker);
+  $('picker-input').addEventListener('keydown',event=>{if(['ArrowDown','ArrowUp','Enter'].includes(event.key)){event.preventDefault();if(event.key==='Enter')confirmPick();else if(matches.length){highlight=(highlight+(event.key==='ArrowDown'?1:-1)+matches.length)%matches.length;highlightOption();}}});
+  $('quick-pick').addEventListener('close',()=>{picker=null;restoreFocus?.focus();});
+  $('quick-pick').addEventListener('click',event=>{if(event.target===$('quick-pick')){const r=event.target.getBoundingClientRect();if(event.clientX<r.left||event.clientX>r.right||event.clientY<r.top||event.clientY>r.bottom)event.target.close();}});
+  $('close-picker').addEventListener('click',()=>$('quick-pick').close());
+  for(const kind of ['target','scheme','configuration','destination'])$('choose-'+kind).addEventListener('click',event=>openPicker(kind,event.currentTarget));
+  $('connection').addEventListener('click',event=>openPicker('connection',event.currentTarget));$('search-targets').addEventListener('click',event=>openPicker('target',event.currentTarget));
+  function wait(ms,signal){return new Promise((resolve,reject)=>{if(signal.aborted){reject(new Error('cancelled'));return;}const abort=()=>{clearTimeout(timer);reject(new Error('cancelled'));};const timer=setTimeout(()=>{signal.removeEventListener('abort',abort);resolve();},ms);signal.addEventListener('abort',abort,{once:true});});}
+  async function execute(action) {
+    const c=context(), key=scopeKey(), blocked=availability(action,c);if(blocked)return;
+    const task={context:{...c},status:'running',title:operationNames[action]+' · '+c.targetName,phase:'检查配置',progress:0,controller:new AbortController()};
+    if(['run','debug'].includes(action)&&!products.has(productKey(c))){task.status='error';task.title='缺少当前配置的产物';task.phase='请先编译，或选择“构建并调试”。';history.set(key,task);log('无法'+operationNames[action]+'：'+contextText(c)+'。请先使用相同配置编译。','error');renderTask();return;}
+    running.set(key,task);log('开始'+operationNames[action]+'：'+contextText(c));renderTask();
+    const phases=action==='compile'?['解析构建设置','编译目标与依赖','生成产物']:action==='buildDebug'?['解析构建设置','编译目标与依赖','生成产物','准备调试环境','连接调试器']:action==='test'?['编译测试目标','启动测试进程','执行测试用例']:action==='run'?['检查产物','准备运行环境','启动应用']:['检查产物','准备调试环境','连接调试器'];
+    try {
+      for(let i=0;i<phases.length;i++){task.phase=phases[i];task.progress=Math.round(i/phases.length*100);renderTask();log(c.targetName+' · '+task.phase);await wait(650,task.controller.signal);if(task.phase==='生成产物'||(action==='test'&&i===0))products.add(productKey(c));}
+      task.status='success';task.title=operationNames[action]+'完成 · '+c.targetName;task.phase=action==='debug'||action==='buildDebug'?'模拟断点已命中；未启动真实调试器。':action==='test'?'模拟测试：2 个通过。':'模拟操作已完成。';task.progress=100;log(task.title,'success');
+    } catch(error) {task.status=task.controller.signal.aborted?'cancelled':'error';task.title=task.controller.signal.aborted?'任务已取消':'任务失败';task.phase=task.controller.signal.aborted?'本次操作已停止。':String(error);log(c.targetName+' · '+task.title,task.status==='error'?'error':'info');}
+    finally {if(running.get(key)===task){running.delete(key);history.set(key,task);}renderTask();}
+  }
+  for(const button of document.querySelectorAll('[data-operation]'))button.addEventListener('click',()=>execute(button.dataset.operation));
+  $('cancel-task').addEventListener('click',()=>running.get(scopeKey())?.controller.abort());
+  $('clear-output').addEventListener('click',()=>$('logs').replaceChildren());
+  $('reset').addEventListener('click',()=>{for(const task of running.values())task.controller.abort();running.clear();history.clear();products.clear();state=initialState();save();$('logs').replaceChildren();render();log('演示已重置。');});
+  render();log('演示已就绪。所有设备、构建和调试结果均为模拟。');
+})();
+</script>
+</body>
+</html>

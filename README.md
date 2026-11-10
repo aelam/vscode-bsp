@@ -48,6 +48,12 @@ Requires VS Code 1.74 or later and a BSP server for your build tool.
 Install a local VSIX with **Extensions: Install from VSIX...**, or follow
 [Building from Source](#building-from-source).
 
+Run **BSP: Browse BSP Servers…** from the Command Palette to see setup instructions,
+local command status, and homepage links. For example, SourceKit BSP can be installed
+with `mint install aelam/sourcekit-bsp`. The extension does not install servers.
+It checks known commands on `PATH`; servers without a known command show an unknown
+status. You still need a `.bsp` connection file for each server.
+
 ### Configuration
 
 Keep connection files in `.bsp/*.json` at each VS Code workspace folder's root.
@@ -60,7 +66,8 @@ Use your server's setup instructions to generate its connection file:
 | Build tool | Server |
 | --- | --- |
 | Xcode / SwiftPM | [sourcekit-bsp](https://github.com/aelam/sourcekit-bsp) |
-| Bazel | [bazel-bsp](https://github.com/JetBrains/bazel-bsp) |
+| Bazel | [bazel-bsp](https://github.com/JetBrains/bazel-bsp) (archived; see its successor link) |
+| Scala | [Bloop](https://scalacenter.github.io/bloop/) |
 | sbt | [sbt](https://github.com/sbt/sbt) |
 | Mill / Kotlin | [Mill](https://github.com/com-lihaoyi/mill) |
 | Gradle / Java | [Build Server for Gradle](https://github.com/microsoft/build-server-for-gradle) |
@@ -73,11 +80,12 @@ For sourcekit-bsp, install the server and create `.bsp/sourcekit-bsp.json`:
   "version": "1.0",
   "bspVersion": "2.2.0",
   "languages": ["swift", "c", "cpp", "objective-c", "objective-cpp"],
-  "argv": ["/absolute/path/to/sourcekit-bsp"]
+  "argv": ["sourcekit-bsp"]
 }
 ```
 
-Replace the executable path with your installed or built server. For Swift code
+If VS Code cannot find `sourcekit-bsp` on `PATH`, use its absolute path in `argv`.
+For Swift code
 navigation, install the [Swift extension](https://github.com/swiftlang/vscode-swift).
 It runs SourceKit-LSP independently of this client. For Xcode projects,
 SourceKit-LSP uses a separate BSP connection; use the same Xcode toolchain for

@@ -14,6 +14,7 @@ import { revealBuildOutput } from './outputPaths';
 import { cleanBuildCache } from './cleanCache';
 import { BspTaskProvider } from './bspTaskProvider';
 import { BspTargetResolver } from './bspTargetResolver';
+import { registerServerCatalog } from './serverCatalog';
 import { initializeBuildLogger, initializeLogger, showBuildOutput, log, logError, logInfo } from './logger';
 import * as path from 'path';
 
@@ -344,6 +345,7 @@ async function navigateToTargetFolder(item?: NavigateFolderItem): Promise<void> 
 }
 
 export async function activate(context: vscode.ExtensionContext) {
+    context.subscriptions.push(registerServerCatalog());
     // Create output channels
     outputChannel = vscode.window.createOutputChannel('vscode-bsp', { log: true });
     context.subscriptions.push(outputChannel);

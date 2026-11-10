@@ -8,6 +8,8 @@ import shutil
 import subprocess
 import sys
 
+from workspace import write_workspace
+
 
 def configure_sourcekit(parser, args, directory):
     config_path = directory / ".bsp/sourcekit-bsp.json"
@@ -53,16 +55,17 @@ def main():
     parser.add_argument("--macos-keychain", action="store_true", help="Use certificates already trusted by the macOS keychain")
     args = parser.parse_args()
     directory = Path(__file__).resolve().parent
-    configure_sourcekit(parser, args, directory)
+    xcode = directory / "p1"
+    configure_sourcekit(parser, args, xcode)
     swiftpm = directory / "p3"
-    swiftpm_config = json.loads((directory / ".bsp/sourcekit-bsp.json").read_text())
+    swiftpm_config = json.loads((xcode / ".bsp/sourcekit-bsp.json").read_text())
     swiftpm_config["name"] = "sourcekit-swiftpm"
     swiftpm_config["kind"] = "swiftpm"
     swiftpm_config["languages"] = ["swift"]
     (swiftpm / ".bsp").mkdir(parents=True, exist_ok=True)
     (swiftpm / ".bsp/sourcekit-bsp.json").write_text(json.dumps(swiftpm_config, indent=2) + "\n")
     (swiftpm / ".vscode").mkdir(parents=True, exist_ok=True)
-    settings = directory / ".vscode/settings.json"
+    settings = xcode / ".vscode/settings.json"
     if settings.is_file():
         shutil.copyfile(settings, swiftpm / ".vscode/settings.json")
     if args.macos_keychain and sys.platform != "darwin":
@@ -91,19 +94,10 @@ def main():
     config = json.loads(generated_config.read_text())
     config["argv"] = ["/usr/bin/env", *launch_environment, "/bin/sh", str(kotlin / "bsp-launch.sh"), *config["argv"][1:]]
     config["version"] = config.get("millVersion", "0.12.17")
-    config_path = directory / ".bsp/mill-bsp.json"
+    config_path = kotlin / ".bsp/mill-bsp.json"
     config_path.write_text(json.dumps(config, indent=2) + "\n")
-    generated_config.unlink()
-    workspace = directory / "hello-swift-kotlin.code-workspace"
-    folders = [
-        {"name": "Xcode + Mill", "path": "."},
-        {"name": "SwiftPM", "path": "p3"},
-    ]
-    if (directory / "p4/.bsp/gradle-bsp.json").is_file():
-        folders.append({"name": "Gradle Java", "path": "p4"})
-    workspace.write_text(json.dumps({"folders": folders}, indent=2) + "\n")
+    workspace = write_workspace(directory)
     print(f"Open all configured connections in VS Code: {workspace}")
-    print(f"Open only Xcode and Mill: {directory}")
 
 
 if __name__ == "__main__":

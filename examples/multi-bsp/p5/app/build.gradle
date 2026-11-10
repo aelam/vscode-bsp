@@ -1,0 +1,18 @@
+plugins {
+    id 'com.android.application' version '8.5.1'
+}
+
+android {
+    namespace 'example.bspandroid'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'example.bspandroid'
+        minSdk 26
+        targetSdk 34
+    }
+}
+
+dependencies {
+    testImplementation 'junit:junit:4.13.2'
+}

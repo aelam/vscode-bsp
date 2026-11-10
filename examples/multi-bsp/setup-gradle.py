@@ -10,6 +10,8 @@ import subprocess
 import sys
 import zipfile
 
+from workspace import write_workspace
+
 
 SERVER_COMMIT = "6a424f4598b3a2032542eb5230ec05af126d45ef"
 SERVER_SHA256 = "0ffdf1eb2fa8d14b89b612e68cc6912f9b80013e79531cba28c9247d886fe235"
@@ -111,10 +113,7 @@ def main():
     }
     (project / ".bsp").mkdir(exist_ok=True)
     (project / ".bsp/gradle-bsp.json").write_text(json.dumps(config, indent=2) + "\n")
-    workspace = directory / "hello-swift-kotlin.code-workspace"
-    folders = [{"name": "Xcode + Mill", "path": "."}, {"name": "SwiftPM", "path": "p3"},
-               {"name": "Gradle Java", "path": "p4"}]
-    workspace.write_text(json.dumps({"folders": folders}, indent=2) + "\n")
+    workspace = write_workspace(directory)
     print(f"Open workspace in VS Code: {workspace}")
     print("Gradle BSP uses the standard protocol. Android, debugging, and the context extension are not provided.")
 
