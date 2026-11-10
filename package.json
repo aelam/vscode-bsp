@@ -12,6 +12,7 @@
   "activationEvents": [
     "workspaceContains:.bsp",
     "workspaceContains:**/.bsp/*",
+    "onCommand:bsp.browseServers",
     "onCommand:bsp.activate",
     "onDebugResolve:bsp-debug",
     "onDebugInitialConfigurations",
@@ -249,6 +250,12 @@
       }
     ],
     "commands": [
+      {
+        "command": "bsp.browseServers",
+        "title": "Browse BSP Servers…",
+        "category": "BSP",
+        "icon": "$(list-selection)"
+      },
       {
         "command": "bsp.activate",
         "title": "Activate BSP Extension",
@@ -512,6 +519,11 @@
     },
     "menus": {
       "view/title": [
+        {
+          "command": "bsp.browseServers",
+          "when": "view == bspTargets",
+          "group": "navigation"
+        },
         {
           "command": "bsp.refresh",
           "when": "view == bspTargets",

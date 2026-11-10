@@ -1,44 +1,43 @@
 # Multiple BSP servers in one workspace
 
-This example combines Xcode, SwiftPM, Kotlin with Mill, and an optional Java
-project with Gradle BSP. Xcode and Mill share one workspace folder. SwiftPM and
-Gradle have separate folders in the generated VS Code workspace:
+This example combines Xcode, SwiftPM, Kotlin with Mill, a Java project with
+Gradle BSP, and an Android project with Microsoft's Gradle Build Server. Each
+project has its own folder and BSP connection in the generated VS Code workspace:
 
 ```text
 multi-bsp/
-├── .bsp/
-│   ├── sourcekit-bsp.json
-│   └── mill-bsp.json
-├── Hello.xcworkspace         References p1/Hello.xcodeproj
 ├── p1/                      Swift project
 │   ├── Hello.xcodeproj
 │   ├── Hello/
 │   ├── HelloTests/
-│   └── HelloUITests/
+│   ├── HelloUITests/
+│   └── .bsp/sourcekit-bsp.json
 ├── p2/                      Kotlin project (Mill BSP)
 │   ├── build.mill
 │   ├── mill
 │   ├── bsp-launch.sh
 │   ├── app/
-│   └── tests/
+│   ├── tests/
+│   └── .bsp/mill-bsp.json
 ├── p3/                      SwiftPM package (SourceKit BSP)
 │   ├── Package.swift
 │   ├── Sources/
 │   ├── Tests/
 │   └── .bsp/sourcekit-bsp.json
-└── p4/                      Java project (Gradle BSP, optional)
+├── p4/                      Java project (opencastsoftware Gradle BSP, optional)
+│   ├── settings.gradle
+│   ├── app/
+│   └── .bsp/gradle-bsp.json
+└── p5/                      Android Java app (Microsoft Gradle BSP, optional)
     ├── settings.gradle
     ├── app/
     └── .bsp/gradle-bsp.json
 ```
 
-For Xcode and Mill, both servers receive `multi-bsp` as the workspace root.
-[sourcekit-bsp](https://github.com/aelam/sourcekit-bsp)
-uses `Hello.xcworkspace` to find the project in `p1`. The
-[Mill](https://github.com/com-lihaoyi/mill) launcher changes its working directory
-to `p2` before starting Mill. Each server supplies its own build targets, actions, and test results.
-The client uses standard BSP connection files. SwiftPM and Gradle receive their
-own folder as the workspace root.
+Each server receives its project folder as the workspace root.
+[sourcekit-bsp](https://github.com/aelam/sourcekit-bsp) loads `p1/Hello.xcodeproj`.
+The [Mill](https://github.com/com-lihaoyi/mill) launcher starts in `p2`.
+Each server supplies its own targets, actions, and test results.
 
 ## Setup
 
@@ -50,8 +49,8 @@ vscode-bsp repository:
 python3 examples/multi-bsp/setup.py --sourcekit-bsp /path/to/sourcekit-bsp
 ```
 
-Setup writes the Xcode and Mill connections into the root `.bsp` directory and
-the SwiftPM connection into `p3/.bsp`. It downloads Mill and Kotlin dependencies
+Setup writes the Xcode, Mill, and SwiftPM connections into the `.bsp` directory
+of `p1`, `p2`, and `p3`, respectively. It downloads Mill and Kotlin dependencies
 and runs the Kotlin tests. Mill includes its BSP server; no separate Kotlin BSP
 installation is needed. Setup also writes `.vscode/settings.json` so the Swift
 extension uses the selected Xcode toolchain instead of a tool-manager shim.
@@ -66,38 +65,10 @@ macOS and the certificate is already trusted by the keychain, add
 
 Build the updated extension with `npm run compile`, then reload its development
 window and open the generated `hello-swift-kotlin.code-workspace`. The BSP view
-shows **sourcekit-bsp**, **mill-bsp**, and **sourcekit-swiftpm**. With this default
-setup, opening only the `multi-bsp` folder loads Xcode and Mill.
-
-### Centralized connections
-
-With a sourcekit-bsp build that supports explicit project selection, connections
-can share the root `.bsp` directory. For SwiftPM, create
-`.bsp/sourcekit-swiftpm.json`:
-
-```json
-{
-  "name": "sourcekit-swiftpm",
-  "version": "0.2",
-  "bspVersion": "2.2.0",
-  "languages": ["swift"],
-  "argv": ["/path/to/sourcekit-bsp", "--package", "p3"]
-}
-```
-
-An Xcode connection can use
-`["/path/to/sourcekit-bsp", "--workspace", "Hello.xcworkspace"]` as its `argv`,
-or use `--project p1/Hello.xcodeproj`. Open `multi-bsp` in VS Code. Each connection
-receives the same workspace root; its server resolves the selected project path
-relative to that root. Each connection keeps its own Context choices.
-A child `.bsp` directory is not required by the BSP standard for each package.
-
-This layout supports target-level Compile, Run, Test, and Debug when advertised
-by the server. With multiple Swift/C-family configurations in the same `.bsp`,
-SourceKit-LSP 6.4 cannot select the matching connection for individual test
-discovery and source locations; the client reports the ambiguity.
-`setup.py` keeps its existing default of a separate `p3` workspace and connection
-to preserve individual test discovery. The default smoke check uses that layout.
+shows **sourcekit-bsp**, **mill-bsp**, and **sourcekit-swiftpm**. VS Code reads
+`.bsp` from each workspace folder. Opening only the `multi-bsp` parent folder
+does not load the connections inside `p1`, `p2`, and `p3`. An old root `.bsp`
+from a previous setup can still load its own connections when you open the parent.
 
 ### Add Gradle BSP
 
@@ -127,6 +98,40 @@ This server supports standard BSP discovery, compile, run, and test for this
 Java sample. It does not implement the build context extension, Android/AGP,
 or `debugSession/start`.
 
+### Add Microsoft Gradle BSP for Android
+
+The `p5` project uses the
+[aelam/build-server-for-gradle](https://github.com/aelam/build-server-for-gradle)
+fork of Microsoft's Gradle Build Server. Install Android SDK Platform 34 and
+JDK 17 or later. Build the server distribution in its repository, then create
+the local BSP connection:
+
+```sh
+cd /path/to/build-server-for-gradle
+./gradlew :server:installDist
+cd /path/to/vscode-bsp
+python3 examples/multi-bsp/setup-gradle-android.py \
+  --server /path/to/build-server-for-gradle/server/build/install/gradle-bsp/bin/gradle-bsp
+```
+
+The script writes `p5/.bsp/gradle-bsp.json` with the absolute server path and
+adds **Gradle Android** to `hello-swift-kotlin.code-workspace`. The connection
+file is local to your computer. Use `--java-home /path/to/jdk` if the server
+needs a specific JDK. Use `--android-sdk /path/to/sdk` if the SDK is outside
+`ANDROID_HOME` and the default macOS location. The script stores the SDK path
+in the local BSP command and `p5/local.properties`. Open the generated
+`.code-workspace` file after setup.
+Opening only the `multi-bsp` folder does not load `p5/.bsp`: the client reads
+`.bsp` from each VS Code workspace folder, not from nested folders.
+
+The Android app has one Activity and one JUnit test. Use Compile on its BSP
+`app [debug]` target to check the server connection. You can also build and
+test the app from `p5` with `./gradlew :app:assembleDebug :app:testDebugUnitTest`.
+The server does not support `buildTarget/run` or `debugSession/start`. Its Test
+request needs a `scala-test` selection payload, which the generic Test action
+does not send. Use the Gradle test command for this example. Run the APK from
+Android Studio or `adb` if you want to open the app on a device.
+
 ## Try it
 
 - With the context-enabled SourceKit build, open **BSP Contexts** and select the
@@ -136,6 +141,7 @@ or `debugSession/start`.
   includes the selected configuration. Run `GreetingKitTests` in Testing.
 - Under Mill, compile or run `app`. It prints `Hello, BSP!` in `vscode-bsp-log`.
 - If configured, compile or run Gradle's `project ':app'` and run `test source`.
+- If configured, compile `app [debug]` under **Gradle Android**.
 - Open the Testing view. **BSP Tests** groups `HelloTests` and `HelloUITests` under
   SourceKit, and `hello-tests` under Mill.
 - Run a target from each group. Kotlin case results appear after its first run.
@@ -152,7 +158,7 @@ python3 examples/multi-bsp/toggle-failure.py on
 Restore passing tests with `python3 examples/multi-bsp/toggle-failure.py off`.
 The failure marker is ignored by Git.
 
-You can also open `Hello.xcworkspace` or `p1/Hello.xcodeproj` in Xcode. For Kotlin
+You can also open `p1/Hello.xcodeproj` in Xcode. For Kotlin
 command-line builds, enter `p2` and run `./mill app.compile`, `./mill app.run`, or
 `./mill test`.
 If your Java installation needs the macOS keychain, export
@@ -178,7 +184,7 @@ Add `--xcode-build` to build the Xcode `Hello` scheme in Release through a resol
 context. This check requires an installed Xcode simulator SDK.
 
 This starts both real servers through the extension's connection manager. It
-checks their shared root, targets under `p1` and `p2`, Swift test locations, Kotlin
+checks their separate roots, targets under `p1` and `p2`, Swift test locations, Kotlin
 compile/run/test responses, and test result mapping with a small VS Code API
 substitute. It also checks that Mill remains connected after SourceKit closes.
 Use `--expect-failure` with the failure marker turned on. Protocol events are
@@ -199,6 +205,10 @@ The pinned Gradle server advertises Run on `main source`, but only maps a run
 task to `project ':app'`. Use the project target for Run. The client reports
 server failures without adding Gradle-specific target rules.
 
+The Microsoft Gradle server is a separate BSP connection. It does not provide
+Run or Debug for the Android app. Its Android model currently covers Java
+sources; Kotlin Android sources need more server support.
+
 Mill is pinned to 0.12.17. Tests form the root module and depend on the application
 module because Mill's BSP test handler selects root modules; nested test modules
 can fail or return without executing tests. See
@@ -209,10 +219,9 @@ Mill can write ordinary output between BSP frames. The client forwards this
 unframed text to build output and passes framed payloads unchanged to its
 JSON-RPC reader. Malformed or incomplete frames still fail the connection.
 
-SourceKit-LSP filters BSP configurations by supported languages. Swift test
-discovery permits the Java/Scala/Kotlin Mill configuration, but requires a single
-Swift/C-family configuration to avoid choosing the wrong server.
-For this reason, the SwiftPM connection has its own workspace folder.
+SourceKit-LSP filters BSP configurations by supported languages. Each Swift
+project uses its own workspace folder so SourceKit-LSP can select the correct
+connection for test discovery and source locations.
 
 Only the context-enabled SourceKit server supplies Scheme, Configuration, and
 Destination choices through `workspace/contextOptions`. Mill and Gradle keep

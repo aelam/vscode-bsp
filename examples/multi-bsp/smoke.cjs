@@ -103,8 +103,11 @@ async function main() {
     try {
         const directory = path.join(root, '.bsp-smoke');
         await fs.mkdir(directory, { recursive: true });
-        const configs = await manager.discoverBspConfigurations(vscode.Uri.file(root));
-        assert.equal(configs.length, 2, 'Expected two BSP configurations in the same folder');
+        const configs = await manager.discoverWorkspaceConfigurations([
+            vscode.Uri.file(path.join(root, 'p1')),
+            vscode.Uri.file(path.join(root, 'p2'))
+        ]);
+        assert.equal(configs.length, 2, 'Expected one BSP configuration per project folder');
         for (const config of configs) { await manager.addConnection(config); }
         for (const connection of manager.getAllConnections()) {
             connection.client.onTestEvent(event => notifications.push({ connection: connection.config.name, ...event }));
@@ -115,7 +118,9 @@ async function main() {
         const mill = manager.getAllConnections().find(connection => connection.config.name === 'mill-bsp');
         const swift = manager.getAllConnections().find(connection => connection.config.name === 'sourcekit-bsp');
         assert.ok(mill && swift, 'Expected Mill and SourceKit connections');
-        assert.equal(mill.config.workspaceUri.toString(), swift.config.workspaceUri.toString());
+        assert.notEqual(mill.config.workspaceUri.toString(), swift.config.workspaceUri.toString());
+        assert.equal(mill.config.workspaceUri.fsPath, path.join(root, 'p2'));
+        assert.equal(swift.config.workspaceUri.fsPath, path.join(root, 'p1'));
         const client = mill.client;
         assert.equal(client.contexts.enabled, false, 'Mill must remain on the standard BSP path');
         const targets = client.targets;
@@ -126,7 +131,7 @@ async function main() {
         assert.ok(swiftTargets.every(target => target.id.uri.includes('/p1/Hello.xcodeproj/')));
         const kotlinRoot = pathToFileURL(path.join(root, 'p2')).href;
         assert.ok(targets.every(target => target.id.uri === kotlinRoot || target.id.uri.startsWith(kotlinRoot + '/')));
-        console.log('Two BSP servers connected to the same root:', root);
+        console.log('Two BSP servers connected to separate project folders:', root);
         if (checkContexts) {
             assert.equal(swift.client.contexts.enabled, true, 'Use the server build with the context extension');
             const initial = await swift.client.contexts.options({});
