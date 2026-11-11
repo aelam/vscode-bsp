@@ -1,5 +1,5 @@
-# Keep demo recordings out of the extension package.
-media/demos/*.mp4
+# Demo GIFs are served from GitHub through the rewritten README links.
+media/demos/**
 
 examples/**
 
