@@ -204,7 +204,7 @@ export class BspClient {
         }
     }
 
-    async getSources(targets: BuildTarget[], token?: CancellationToken): Promise<SourcesItem[]> {
+    async getSources(targets: Pick<BuildTarget, 'id'>[], token?: CancellationToken): Promise<SourcesItem[]> {
         if (!this.connection) { throw new Error('BSP client not connected'); }
         const result = await this.connection.sendRequest<{ items: SourcesItem[] }>(
             'buildTarget/sources', { targets: targets.map(target => target.id) }, token ?? CancellationToken.None

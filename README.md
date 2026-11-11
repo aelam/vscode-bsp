@@ -158,6 +158,12 @@ Choose **Reveal Build Output** on a target to open a product location in the
 system file manager. This requires `outputPathsProvider` and
 `buildTarget/outputPaths`; the client does not guess output paths.
 
+Choose **Navigate to Folder…** on a target or dependency to reveal its source
+folders in Explorer. The client requests `buildTarget/sources` from that item's
+server and lists existing source roots and folders before generated sources and
+project locations. A target can have sources in several folders. If the server
+cannot provide sources, the command uses the target's base directory and URI.
+
 ### Clean build cache
 
 Choose **Clean Build Cache…** on a target and confirm the shared-cache warning.

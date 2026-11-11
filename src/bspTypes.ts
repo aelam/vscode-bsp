@@ -56,6 +56,7 @@ export interface CleanCacheResult {
 export interface SourcesItem {
     target: BuildTargetIdentifier;
     sources: { uri: string; kind: number; generated: boolean }[];
+    roots?: string[];
 }
 
 export interface TestParams {
