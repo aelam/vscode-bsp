@@ -88,6 +88,20 @@ a Marketplace version already uploaded by that run, so the GitHub Release can
 still finish. Existing tags are never moved, and published versions are never
 overwritten. Changes to source code require a new version.
 
+## README video demos
+
+GitHub embeds MP4 videos uploaded as attachments. Repository file links open the
+file view. The README marks each demo that needs a video attachment URL.
+
+1. Open `README.md` in the GitHub editor on the PR branch.
+2. Drag the matching MP4 from `media/demos` into the editor.
+3. Replace its preview Markdown with the generated `https://github.com/user-attachments/assets/...` URL on its own line.
+4. Check the preview before committing.
+
+Keep the original MP4 recordings in `media/demos`. Check the Marketplace rendering
+separately; GitHub's inline player is specific to GitHub. Marketplace README
+changes appear after publishing a new extension version.
+
 ## Local packaging and CI
 
 ```sh
