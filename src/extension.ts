@@ -16,7 +16,7 @@ import { BspTaskProvider } from './bspTaskProvider';
 import { BspTargetResolver } from './bspTargetResolver';
 import { registerServerCatalog } from './serverCatalog';
 import { initializeBuildLogger, initializeLogger, showBuildOutput, log, logError, logInfo } from './logger';
-import * as path from 'path';
+import { navigateToTargetFolder } from './targetFolders';
 
 let bspClient: BspClient | undefined;
 let buildTargetProvider: BuildTargetProvider | undefined;
@@ -178,170 +178,6 @@ async function getOrSelectBuildTarget(item?: any, include: (target: BuildTarget)
     }
     
     return null;
-}
-
-interface NavigateFolderItem {
-    label?: string | vscode.TreeItemLabel;
-    buildTarget?: BuildTarget;
-    dependency?: { uri: string };
-}
-
-interface FolderCandidate {
-    uri: vscode.Uri;
-    parentsToTry: number;
-    label?: string;
-}
-
-interface FolderPickItem extends vscode.QuickPickItem {
-    uri: vscode.Uri;
-}
-
-function uriFromBspValue(value: string): vscode.Uri | undefined {
-    const trimmed = value.trim();
-    if (!trimmed) { return undefined; }
-
-    if (path.isAbsolute(trimmed)) {
-        return vscode.Uri.file(trimmed);
-    }
-
-    try {
-        const uri = vscode.Uri.parse(trimmed);
-        if (uri.scheme === 'file') {
-            return uri;
-        }
-        if (uri.path.startsWith('/')) {
-            return vscode.Uri.file(decodeURIComponent(uri.path));
-        }
-    } catch {
-        return undefined;
-    }
-
-    return undefined;
-}
-
-function projectPathFromUriPath(uriPath: string): string | undefined {
-    const decodedPath = decodeURIComponent(uriPath);
-    for (const extension of ['.xcodeproj', '.xcworkspace']) {
-        const index = decodedPath.indexOf(extension);
-        if (index >= 0) {
-            return decodedPath.slice(0, index + extension.length);
-        }
-    }
-    return undefined;
-}
-
-function getNavigateFolderCandidates(item: NavigateFolderItem): FolderCandidate[] {
-    const candidates: FolderCandidate[] = [];
-    const seen = new Set<string>();
-    const addCandidate = (value: string | undefined, parentsToTry: number, label?: string) => {
-        if (!value) { return; }
-        const uri = uriFromBspValue(value);
-        if (!uri || seen.has(uri.toString())) { return; }
-        candidates.push({ uri, parentsToTry, label });
-        seen.add(uri.toString());
-    };
-    const addProjectCandidates = (value: string | undefined) => {
-        if (!value) { return; }
-        let uriPath: string | undefined;
-        try {
-            const uri = vscode.Uri.parse(value.trim());
-            uriPath = uri.path;
-        } catch {
-            uriPath = value;
-        }
-
-        const projectPath = projectPathFromUriPath(uriPath);
-        if (!projectPath) { return; }
-        addCandidate(path.dirname(projectPath), 0, 'Project Folder');
-        addCandidate(projectPath, 0, 'Xcode Project');
-    };
-
-    addCandidate(item.buildTarget?.baseDirectory, 0);
-    addProjectCandidates(item.buildTarget?.id.uri);
-    addCandidate(item.buildTarget?.id.uri, 3);
-    addProjectCandidates(item.dependency?.uri);
-    addCandidate(item.dependency?.uri, 3);
-
-    return candidates;
-}
-
-async function getExistingFolderUri(candidate: FolderCandidate): Promise<vscode.Uri | undefined> {
-    let uri = candidate.uri;
-    let parentsRemaining = candidate.parentsToTry;
-
-    while (true) {
-        try {
-            const stat = await vscode.workspace.fs.stat(uri);
-            if ((stat.type & vscode.FileType.Directory) !== 0) {
-                return uri;
-            }
-
-            const parentPath = path.dirname(uri.fsPath);
-            return parentPath === uri.fsPath ? uri : vscode.Uri.file(parentPath);
-        } catch (error: any) {
-            if (error.code !== 'FileNotFound' || parentsRemaining <= 0) {
-                return undefined;
-            }
-        }
-
-        const parentPath = path.dirname(uri.fsPath);
-        if (parentPath === uri.fsPath) {
-            return undefined;
-        }
-
-        uri = vscode.Uri.file(parentPath);
-        parentsRemaining--;
-    }
-}
-
-function getNavigateItemLabel(item: NavigateFolderItem): string {
-    if (item.buildTarget) {
-        return item.buildTarget.displayName || item.buildTarget.id.uri;
-    }
-    if (item.dependency) {
-        return item.dependency.uri;
-    }
-    if (typeof item.label === 'string') {
-        return item.label;
-    }
-    return 'selected item';
-}
-
-async function navigateToTargetFolder(item?: NavigateFolderItem): Promise<void> {
-    if (!item) { return; }
-
-    const folders: FolderPickItem[] = [];
-    const seen = new Set<string>();
-    for (const candidate of getNavigateFolderCandidates(item)) {
-        const folderUri = await getExistingFolderUri(candidate);
-        if (folderUri && !seen.has(folderUri.toString())) {
-            folders.push({
-                label: candidate.label ?? (path.basename(folderUri.fsPath) || folderUri.fsPath),
-                description: folderUri.fsPath,
-                uri: folderUri
-            });
-            seen.add(folderUri.toString());
-        }
-    }
-
-    if (folders.length === 1) {
-        await vscode.commands.executeCommand('revealInExplorer', folders[0].uri);
-        return;
-    }
-
-    if (folders.length > 1) {
-        const selected = await vscode.window.showQuickPick(folders, {
-            placeHolder: 'Select a folder to reveal in Explorer'
-        });
-        if (selected) {
-            await vscode.commands.executeCommand('revealInExplorer', selected.uri);
-        }
-        return;
-    }
-
-    vscode.window.showInformationMessage(
-        `Could not find a folder for "${getNavigateItemLabel(item)}". The target did not provide a usable base directory and no existing folder could be inferred from its URI.`
-    );
 }
 
 export async function activate(context: vscode.ExtensionContext) {
@@ -657,7 +493,9 @@ async function initializeBspExtension(context: vscode.ExtensionContext) {
         try {
             const selected = await getOrSelectBuildTarget(item);
             if (!selected) { return; }
-            await navigateToTargetFolder(selected);
+            const client = selected.connectionId
+                ? connectionManager?.getConnection(selected.connectionId)?.client : bspClient;
+            await navigateToTargetFolder(selected, client);
         } catch (error) {
             logError('Failed to navigate to folder', error);
             void vscode.window.showErrorMessage(`Failed to navigate to folder: ${error}`);
