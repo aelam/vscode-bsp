@@ -1,0 +1,57 @@
+name: Video demos
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - docs/demos/**
+      - media/demos/**
+      - media/icon.png
+      - .github/workflows/demos.yml
+  pull_request:
+    paths:
+      - docs/demos/**
+      - media/demos/**
+      - media/icon.png
+      - .github/workflows/demos.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: demos-${{ github.event_name == 'pull_request' && github.ref || 'production' }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+      - name: Assemble the demo site
+        run: |
+          mkdir -p _site/media
+          cp docs/demos/index.html _site/index.html
+          cp media/icon.png _site/icon.png
+          cp media/demos/*.jpg media/demos/*.mp4 _site/media/
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    if: github.repository == 'aelam/vscode-bsp' && github.ref == 'refs/heads/master'
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/configure-pages@v5
+      - uses: actions/deploy-pages@v5
+        id: deployment

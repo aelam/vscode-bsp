@@ -9,27 +9,27 @@ Language extensions provide completion and code navigation separately.
 
 These recordings show multiple BSP servers in one workspace, plus Xcode and
 SwiftPM workflows with [sourcekit-bsp](https://github.com/aelam/sourcekit-bsp).
-Click a preview to watch the full video.
+Click a preview to open the full video in a player with playback controls.
 
 ### Multiple BSP servers
 
 Connect multiple instances of the same server or different BSP servers in one
 VS Code workspace. Each connection has its own targets and supported build settings.
 
-[![Watch the multiple BSP connections demo](media/demos/bsp-multiple-connections.jpg)](media/demos/bsp-multiple-connections.mp4)
+[![Watch the multiple BSP connections demo](media/demos/bsp-multiple-connections.jpg)](https://aelam.github.io/vscode-bsp/#multiple-connections)
 
 ### Xcode and SwiftPM configuration
 
 Select build settings in the BSP view, including Xcode schemes, configurations,
 and destinations.
 
-[![Watch the Xcode and SwiftPM configuration demo](media/demos/bsp-configuration.jpg)](media/demos/bsp-configuration.mp4)
+[![Watch the Xcode and SwiftPM configuration demo](media/demos/bsp-configuration.jpg)](https://aelam.github.io/vscode-bsp/#configuration)
 
 ### Run an app
 
 Run an app on the iOS simulator from the BSP view.
 
-[![Watch the app run demo](media/demos/bsp-run.jpg)](media/demos/bsp-run.mp4)
+[![Watch the app run demo](media/demos/bsp-run.jpg)](https://aelam.github.io/vscode-bsp/#run)
 
 ### Go to Definition
 
@@ -37,7 +37,7 @@ Navigate to Swift source and SDK definitions with the
 [Swift extension](https://github.com/swiftlang/vscode-swift) and SourceKit-LSP,
 using build information from [sourcekit-bsp](https://github.com/aelam/sourcekit-bsp).
 
-[![Watch the Go to Definition demo](media/demos/bsp-sourcekit.jpg)](media/demos/bsp-sourcekit.mp4)
+[![Watch the Go to Definition demo](media/demos/bsp-sourcekit.jpg)](https://aelam.github.io/vscode-bsp/#sourcekit)
 
 ## Setup
 

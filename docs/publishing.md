@@ -104,7 +104,11 @@ PR CI runs tests and lint on Linux and macOS. Linux also packages the extension
 and uploads a `vscode-bsp-vsix` artifact. PR CI has no publishing permission.
 
 Packaging uses the `master` branch to rewrite README links. Demo thumbnails
-remain in the package; MP4 links point to GitHub. Example projects, tests,
+remain in the package and link to the GitHub Pages video player. The **Video demos**
+workflow publishes the player and original MP4 files when their files change on
+`master`. Enable GitHub Pages with **GitHub Actions** as the source in repository
+settings. PRs build the site without deploying it. Marketplace README changes
+appear after a new extension version is published. Example projects, tests,
 TypeScript sources, source maps, publishing scripts, and the editable SVG icon
 are excluded. The Marketplace icon uses `media/icon.png` at 256 × 256 pixels.
 

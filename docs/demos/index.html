@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="Watch BSP Client demos for VS Code: connect build servers, configure Xcode and SwiftPM, run an app, and navigate Swift code.">
+    <title>BSP Client video demos</title>
+    <link rel="icon" href="icon.png" type="image/png">
+    <style>
+      :root { color-scheme: light dark; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f5f7fa; color: #172b42; }
+      * { box-sizing: border-box; }
+      body { margin: 0; }
+      main { width: min(1100px, 100%); margin: auto; padding: 44px 24px 64px; }
+      header { display: flex; align-items: center; gap: 18px; margin-bottom: 24px; }
+      header img { width: 64px; height: 64px; flex-shrink: 0; }
+      h1 { margin: 0 0 6px; font-size: clamp(1.7rem, 4vw, 2.4rem); letter-spacing: -.03em; }
+      header p, section p { margin: 0; line-height: 1.6; color: #526479; }
+      a { color: #1258a5; text-underline-offset: 3px; }
+      a:focus-visible, video:focus-visible { outline: 3px solid #1976d2; outline-offset: 4px; }
+      nav { display: flex; flex-wrap: wrap; gap: 10px; margin: 26px 0 36px; }
+      nav a { padding: 9px 14px; border: 1px solid #ced8e3; border-radius: 8px; text-decoration: none; background: #fff; }
+      nav a:hover { background: #e9f2fc; }
+      section { scroll-margin-top: 24px; margin: 0 0 36px; padding: 24px; background: #fff; border: 1px solid #dce3eb; border-radius: 14px; }
+      h2 { margin: 0 0 8px; font-size: 1.4rem; letter-spacing: -.02em; }
+      video { display: block; width: 100%; aspect-ratio: 3028 / 1918; margin: 18px 0 12px; background: #101927; border-radius: 8px; }
+      .video-link { font-size: .9rem; }
+      footer { display: flex; flex-wrap: wrap; gap: 12px 24px; font-size: .95rem; }
+      @media (max-width: 600px) {
+        main { padding: 24px 14px 40px; }
+        header { align-items: flex-start; gap: 12px; }
+        header img { width: 48px; height: 48px; }
+        section { padding: 16px; }
+        nav { gap: 8px; }
+        nav a { padding: 8px 10px; font-size: .9rem; }
+      }
+      @media (prefers-color-scheme: dark) {
+        :root { background: #0c1522; color: #e7edf5; }
+        header p, section p { color: #a6b5c8; }
+        section, nav a { background: #142133; border-color: #2a3b52; }
+        nav a:hover { background: #20364f; }
+        a { color: #8dc4ff; }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <img src="icon.png" alt="" width="64" height="64">
+        <div>
+          <h1>BSP Client video demos</h1>
+          <p>Build, run, and navigate Apple projects in VS Code. Choose a demo and press play.</p>
+        </div>
+      </header>
+      <nav aria-label="Choose a demo">
+        <a href="#multiple-connections">Multiple servers</a>
+        <a href="#configuration">Build settings</a>
+        <a href="#run">Run an app</a>
+        <a href="#sourcekit">Go to Definition</a>
+      </nav>
+
+      <section id="multiple-connections" aria-labelledby="multiple-connections-title">
+        <h2 id="multiple-connections-title">Multiple BSP servers</h2>
+        <p>Connect multiple build servers in one workspace, each with its own targets and build settings.</p>
+        <video controls playsinline preload="metadata" poster="media/bsp-multiple-connections.jpg" aria-label="Multiple BSP servers demo">
+          <source src="media/bsp-multiple-connections.mp4" type="video/mp4">
+          Your browser cannot play this video. Use the MP4 link below.
+        </video>
+        <a class="video-link" href="media/bsp-multiple-connections.mp4">Open the full MP4</a>
+      </section>
+
+      <section id="configuration" aria-labelledby="configuration-title">
+        <h2 id="configuration-title">Xcode and SwiftPM configuration</h2>
+        <p>Select schemes, configurations, and destinations from the BSP view.</p>
+        <video controls playsinline preload="metadata" poster="media/bsp-configuration.jpg" aria-label="Xcode and SwiftPM configuration demo">
+          <source src="media/bsp-configuration.mp4" type="video/mp4">
+          Your browser cannot play this video. Use the MP4 link below.
+        </video>
+        <a class="video-link" href="media/bsp-configuration.mp4">Open the full MP4</a>
+      </section>
+
+      <section id="run" aria-labelledby="run-title">
+        <h2 id="run-title">Run an app</h2>
+        <p>Build and run an app on the iOS simulator from VS Code.</p>
+        <video controls playsinline preload="metadata" poster="media/bsp-run.jpg" aria-label="Run an app demo">
+          <source src="media/bsp-run.mp4" type="video/mp4">
+          Your browser cannot play this video. Use the MP4 link below.
+        </video>
+        <a class="video-link" href="media/bsp-run.mp4">Open the full MP4</a>
+      </section>
+
+      <section id="sourcekit" aria-labelledby="sourcekit-title">
+        <h2 id="sourcekit-title">Go to Definition</h2>
+        <p>Navigate Swift source and SDK definitions with the Swift extension, SourceKit-LSP, and sourcekit-bsp.</p>
+        <video controls playsinline preload="metadata" poster="media/bsp-sourcekit.jpg" aria-label="Go to Definition demo">
+          <source src="media/bsp-sourcekit.mp4" type="video/mp4">
+          Your browser cannot play this video. Use the MP4 link below.
+        </video>
+        <a class="video-link" href="media/bsp-sourcekit.mp4">Open the full MP4</a>
+      </section>
+
+      <footer>
+        <a href="https://marketplace.visualstudio.com/items?itemName=lunwang.vscode-bsp">Install BSP Client</a>
+        <a href="https://github.com/aelam/vscode-bsp">View the project on GitHub</a>
+      </footer>
+    </main>
+  </body>
+</html>
