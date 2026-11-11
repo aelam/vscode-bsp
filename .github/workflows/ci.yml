@@ -31,5 +31,18 @@ jobs:
           registry-url: https://registry.npmjs.org
       - name: Install dependencies
         run: npm ci --no-audit --no-fund
+      - name: Lint
+        run: npm run lint
       - name: Compile and test
         run: npm run test:protocol
+      - name: Package extension
+        if: matrix.os == 'ubuntu-latest'
+        run: npm run package
+      - name: Upload VSIX
+        if: matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: vscode-bsp-vsix
+          path: vscode-bsp.vsix
+          if-no-files-found: error
+          retention-days: 7

@@ -1,0 +1,120 @@
+name: Publish extension
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Version increment
+        required: true
+        default: patch
+        type: choice
+        options: [patch, minor, major]
+  push:
+    branches: [master]
+    paths:
+      - package.json
+      - package-lock.json
+
+permissions:
+  contents: read
+
+concurrency:
+  group: marketplace-publish
+  cancel-in-progress: false
+
+jobs:
+  version:
+    if: github.repository == 'aelam/vscode-bsp' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      should_publish: ${{ steps.release.outputs.should_publish }}
+      tag: ${{ steps.release.outputs.tag }}
+      commit: ${{ steps.release.outputs.commit }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ssh-key: ${{ github.event_name == 'workflow_dispatch' && secrets.RELEASE_SSH_KEY || '' }}
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Prepare release version
+        id: release
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+          BUMP_TYPE: ${{ inputs.bump }}
+          HAS_RELEASE_KEY: ${{ secrets.RELEASE_SSH_KEY != '' }}
+        shell: bash
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+            if [ "$HAS_RELEASE_KEY" != true ]; then
+              echo 'Configure the RELEASE_SSH_KEY repository secret before releasing.' >&2
+              exit 1
+            fi
+            node scripts/prepare-release.cjs
+          else
+            node scripts/check-release.cjs
+          fi
+
+  publish:
+    needs: version
+    if: needs.version.outputs.should_publish == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      id-token: write
+    env:
+      RELEASE_TAG: ${{ needs.version.outputs.tag }}
+      RELEASE_COMMIT: ${{ needs.version.outputs.commit }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.version.outputs.commit }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+          registry-url: https://registry.npmjs.org
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+      - name: Lint
+        run: npm run lint
+      - name: Compile and test
+        run: npm run test:protocol
+      - name: Package extension
+        run: npm run package
+      - name: Upload release VSIX
+        uses: actions/upload-artifact@v4
+        with:
+          name: vscode-bsp-marketplace-vsix
+          path: vscode-bsp.vsix
+          if-no-files-found: error
+      - name: Create version tag
+        shell: bash
+        run: |
+          if git rev-parse --verify --quiet "refs/tags/$RELEASE_TAG" >/dev/null; then
+            tag_commit="$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")"
+            test "$tag_commit" = "$RELEASE_COMMIT"
+          else
+            git tag "$RELEASE_TAG" "$RELEASE_COMMIT"
+            git push origin "refs/tags/$RELEASE_TAG"
+          fi
+      - name: Publish to Visual Studio Marketplace
+        run: npx --no-install vsce publish --oidc --skip-duplicate --packagePath vscode-bsp.vsix
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" vscode-bsp.vsix --clobber
+            gh release edit "$RELEASE_TAG" --draft=false --prerelease=false
+          else
+            gh release create "$RELEASE_TAG" vscode-bsp.vsix \
+              --verify-tag --title "$RELEASE_TAG" --generate-notes
+          fi
