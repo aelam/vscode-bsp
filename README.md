@@ -585,7 +585,7 @@ The [Build Context API](#build-context-api) is a separately negotiated extension
 
 ### Building from Source
 
-Clone this repository. With Node.js, npm, and VS Code's `code` command available,
+Clone this repository. With Node.js 22 or later, npm, and VS Code's `code` command available,
 run from the repository root:
 
 ```sh
@@ -595,8 +595,8 @@ code --new-window --extensionDevelopmentPath="$PWD" /absolute/path/to/applicatio
 ```
 
 Use a project folder containing `.bsp`. The new VS Code window loads this
-extension from source. Use `npm run watch` during development or `vsce package`
-with `vsce` installed to create a VSIX.
+extension from source. Use `npm run watch` during development, `npm run package`
+to create `vscode-bsp.vsix`, or `npm run install-local` to package and install it.
 
 ### Testing
 
@@ -604,11 +604,23 @@ with `vsce` installed to create a VSIX.
 npm run test:protocol
 ```
 
-CI compiles TypeScript and runs protocol tests on Linux and macOS with Node.js 24
-for pull requests and pushes to `master`. These tests use VS Code API substitutes
-and do not require a running editor or build server. For server integration checks,
+CI lints, compiles TypeScript, and runs protocol tests on Linux and macOS with Node.js 24
+for pull requests and pushes to `master`. Linux also packages the VSIX as an artifact.
+These tests use VS Code API substitutes and do not require a running editor or
+build server. For server integration checks,
 see the [multi-BSP example](examples/multi-bsp/README.md#automated-check).
+
+### Publishing
+
+In GitHub Actions, select **Publish extension → Run workflow** on `master`, then
+choose `patch`, `minor`, or `major`. The workflow updates both version files,
+tests, packages, creates the version tag, publishes to Marketplace, and creates
+a GitHub Release with the VSIX attached. A dedicated Deploy Key lets the version
+commit bypass the PR and CI requirements on `master`. Marketplace uses Trusted
+Publishing (OIDC), with no PAT secret. See the
+[publishing guide](docs/publishing.md) for the `lunwang` publisher's Marketplace
+trust policy and release steps.
 
 ## License
 
-MIT License.
+[MIT License](LICENSE).

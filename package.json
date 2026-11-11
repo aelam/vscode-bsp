@@ -3,6 +3,17 @@
   "displayName": "BSP Client",
   "description": "A general Build Server Protocol client for VSCode",
   "version": "0.1.1",
+  "publisher": "lunwang",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/aelam/vscode-bsp.git"
+  },
+  "homepage": "https://github.com/aelam/vscode-bsp#readme",
+  "bugs": {
+    "url": "https://github.com/aelam/vscode-bsp/issues"
+  },
+  "icon": "media/icon.png",
   "engines": {
     "vscode": "^1.74.0"
   },
@@ -833,11 +844,11 @@
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "pretest": "npm run compile && npm run lint",
-    "lint": "eslint src --ext ts",
+    "lint": "eslint src scripts --ext ts,cjs",
     "test": "node ./out/test/runTest.js",
     "test:protocol": "npm run compile && node --test test/*.test.cjs",
-    "package": "vsce package",
-    "install-local": "code --install-extension vscode-bsp-*.vsix"
+    "package": "vsce package --githubBranch master --out vscode-bsp.vsix",
+    "install-local": "npm run package && code --install-extension ./vscode-bsp.vsix"
   },
   "devDependencies": {
     "@types/node": "16.x",
@@ -845,6 +856,7 @@
     "@typescript-eslint/eslint-plugin": "^5.45.0",
     "@typescript-eslint/parser": "^5.45.0",
     "@vscode/test-electron": "^2.2.0",
+    "@vscode/vsce": "4.1.0",
     "eslint": "^8.28.0",
     "typescript": "^4.9.4"
   },

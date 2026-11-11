@@ -2,3 +2,21 @@
 media/demos/*.mp4
 
 examples/**
+
+.github/**
+.bsp/**
+.claude/**
+.gitignore
+.vscode/**
+.vscode-test*/**
+src/**
+test/**
+scripts/**
+docs/**
+out/**/*.map
+media/icon.svg
+tsconfig.json
+.eslintrc*
+CLAUDE.md
+mock-*.js
+*.vsix

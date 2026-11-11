@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" fill="none">
+  <defs>
+    <linearGradient id="tile" x1="32" y1="16" x2="220" y2="250" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#18334F"/>
+      <stop offset="0.52" stop-color="#101F34"/>
+      <stop offset="1" stop-color="#0B1527"/>
+    </linearGradient>
+    <linearGradient id="connection" x1="70" y1="118" x2="190" y2="140" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#66EAD5"/>
+      <stop offset="0.5" stop-color="#48C8E5"/>
+      <stop offset="1" stop-color="#659AFF"/>
+    </linearGradient>
+    <linearGradient id="targets" x1="174" y1="82" x2="198" y2="174" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#A1CEFF"/>
+      <stop offset="1" stop-color="#6C9EFF"/>
+    </linearGradient>
+  </defs>
+  <rect x="8" y="8" width="240" height="240" rx="52" fill="url(#tile)"/>
+  <rect x="8.5" y="8.5" width="239" height="239" rx="51.5" stroke="#709EC9" stroke-opacity="0.18"/>
+  <path d="M70 60V196M70 60H134L186 94L134 128H70M70 128H134L186 162L134 196H70"
+        stroke="url(#connection)" stroke-width="16" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="173" y="81" width="26" height="26" rx="7" fill="url(#targets)"/>
+  <rect x="173" y="149" width="26" height="26" rx="7" fill="url(#targets)"/>
+  <circle cx="70" cy="128" r="12" fill="#D3FFF3"/>
+</svg>
