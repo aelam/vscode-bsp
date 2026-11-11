@@ -88,6 +88,20 @@ a Marketplace version already uploaded by that run, so the GitHub Release can
 still finish. Existing tags are never moved, and published versions are never
 overwritten. Changes to source code require a new version.
 
+## README video demos
+
+GitHub embeds MP4 videos uploaded as attachments. Repository file links open the
+file view. The README marks each demo that needs a video attachment URL.
+
+1. Open `README.md` in the GitHub editor on the PR branch.
+2. Drag the matching MP4 from `media/demos` into the editor.
+3. Replace its preview Markdown with the generated `https://github.com/user-attachments/assets/...` URL on its own line.
+4. Check the preview before committing.
+
+Keep the original MP4 recordings in `media/demos`. Check the Marketplace rendering
+separately; GitHub's inline player is specific to GitHub. Marketplace README
+changes appear after publishing a new extension version.
+
 ## Local packaging and CI
 
 ```sh
@@ -104,11 +118,7 @@ PR CI runs tests and lint on Linux and macOS. Linux also packages the extension
 and uploads a `vscode-bsp-vsix` artifact. PR CI has no publishing permission.
 
 Packaging uses the `master` branch to rewrite README links. Demo thumbnails
-remain in the package and link to the GitHub Pages video player. The **Video demos**
-workflow publishes the player and original MP4 files when their files change on
-`master`. Enable GitHub Pages with **GitHub Actions** as the source in repository
-settings. PRs build the site without deploying it. Marketplace README changes
-appear after a new extension version is published. Example projects, tests,
+remain in the package; MP4 links point to GitHub. Example projects, tests,
 TypeScript sources, source maps, publishing scripts, and the editable SVG icon
 are excluded. The Marketplace icon uses `media/icon.png` at 256 × 256 pixels.
 
