@@ -1,5 +1,7 @@
 # BSP Client Extension
 
+**[Install from Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=lunwang.vscode-bsp)**
+
 A general [Build Server Protocol](https://build-server-protocol.github.io/) (BSP)
 client for VS Code. Browse targets and dependencies, build, run, test, and debug
 through connected servers. Available actions depend on each server's capabilities.
@@ -45,7 +47,9 @@ Requires VS Code 1.74 or later and a BSP server for your build tool.
 
 ### Installation
 
-Install a local VSIX with **Extensions: Install from VSIX...**, or follow
+Install the extension from [Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=lunwang.vscode-bsp).
+
+You can also install a local VSIX with **Extensions: Install from VSIX...**, or follow
 [Building from Source](#building-from-source).
 
 Run **BSP: Browse BSP Servers…** from the Command Palette to see setup instructions,
