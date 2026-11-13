@@ -97,7 +97,7 @@ export class BspDebugAdapterDescriptorFactory implements vscode.DebugAdapterDesc
     private terminated: vscode.Disposable;
     private disposed = false;
 
-    constructor(private provider?: BspDebugConfigurationProvider) {
+    constructor(private provider?: BspDebugConfigurationProvider, private logDirectory?: string) {
         this.terminated = vscode.debug.onDidTerminateDebugSession(session => {
             // Restart ends the old adapter before VS Code requests the next descriptor.
             if (this.expectedTerminations.delete(session)) { return; }
@@ -152,10 +152,10 @@ export class BspDebugAdapterDescriptorFactory implements vscode.DebugAdapterDesc
             } : undefined;
             let adapter: BspDebugAdapter;
             if (typeof connect?.socket === 'string' && connect.socket) {
-                adapter = new BspDebugAdapter({ socket: connect.socket }, options);
+                adapter = new BspDebugAdapter({ socket: connect.socket }, options, this.logDirectory);
             } else if (typeof connect?.host === 'string' && connect.host
                 && Number.isInteger(connect.port) && connect.port > 0 && connect.port <= 65535) {
-                adapter = new BspDebugAdapter({ host: connect.host, port: connect.port }, options);
+                adapter = new BspDebugAdapter({ host: connect.host, port: connect.port }, options, this.logDirectory);
             } else {
                 throw new Error('No valid BSP debug address. Start BSP Debug to request a new debug session.');
             }

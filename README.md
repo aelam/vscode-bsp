@@ -332,6 +332,13 @@ and macOS executables, including SwiftPM. One matching process is selected
 automatically. If several processes match, set `pid` in the configuration.
 No match produces an error. Test Attach is not supported.
 
+Large evaluation results and rapid debugger output use shortened previews in the
+Debug Console to keep the window responsive. A notice links to additional text in
+a local log. The log also has size and queue limits; a notice states when saved
+text is incomplete. Evaluation errors, variable references, and session control
+responses are preserved. This protection uses standard DAP messages and applies
+to all BSP debug servers.
+
 Physical iOS Attach requires a matching local build product for debug symbols.
 The device must be paired, unlocked, and have Developer Mode enabled. Attach does
 not build, install, launch, or terminate the app. See the server's

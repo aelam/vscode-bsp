@@ -47,15 +47,16 @@ for (const transport of ['tcp', 'unix']) {
         let directory, adapter, connection, reader, writer;
         t.after(async () => {
             adapter?.dispose();
+            await adapter?.console.archive.settled();
             reader?.dispose();
             writer?.dispose();
             connection?.destroy();
             await new Promise(resolve => server.close(resolve));
             if (directory) { await fs.rm(directory, { recursive: true, force: true }); }
         });
+        directory = await fs.mkdtemp(path.join(os.tmpdir(), 'bsp-dap-'));
         let endpoint;
         if (transport === 'unix') {
-            directory = await fs.mkdtemp(path.join(os.tmpdir(), 'bsp-dap-'));
             endpoint = { socket: path.join(directory, 'dap.sock') };
             server.listen(endpoint.socket);
         } else {
@@ -65,7 +66,7 @@ for (const transport of ['tcp', 'unix']) {
         endpoint ??= { host: '127.0.0.1', port: server.address().port };
         const connected = once(server, 'connection');
         const backend = inbox(), client = inbox();
-        adapter = new BspDebugAdapter(endpoint);
+        adapter = new BspDebugAdapter(endpoint, undefined, directory);
         adapter.onDidSendMessage(message => client.add(message));
         adapter.handleMessage({ type: 'request', seq: 17, command: 'initialize', arguments: { adapterID: 'bsp' } });
         [connection] = await connected;
@@ -118,6 +119,28 @@ for (const transport of ['tcp', 'unix']) {
         const refreshed = await client.next();
         assert.equal(refreshed.request_seq, 19);
         assert.equal(refreshed.body.threads[1].name, '测试');
+
+        const diagnostic = 'warning: could not load module\n'.repeat(20000) + 'error: no such variable';
+        adapter.handleMessage({ type: 'request', seq: 23, command: 'evaluate', arguments: { expression: 'po missing', context: 'repl' } });
+        const evaluate = await backend.next();
+        assert.equal(evaluate.command, 'evaluate');
+        await writer.write({ type: 'event', seq: 91, event: 'output', body: { category: 'console', output: diagnostic } });
+        await writer.write({ type: 'response', seq: 92, request_seq: evaluate.seq,
+            command: 'evaluate', success: false, message: diagnostic, body: { error: { id: 1, format: diagnostic } } });
+        let evaluated;
+        do { evaluated = await client.next(); } while (evaluated.type !== 'response');
+        assert.equal(evaluated.request_seq, 23);
+        assert.equal(evaluated.success, false);
+        assert.ok(evaluated.message.length < 9000);
+        assert.ok(evaluated.message.includes('error: no such variable'));
+        assert.ok(client.all.filter(message => message.event === 'output')
+            .every(message => message.body.output.length < 9000));
+        await adapter.console.archive.settled();
+        assert.ok((await fs.readFile(adapter.console.archive.file, 'utf8')).includes(diagnostic));
+        adapter.handleMessage({ type: 'request', seq: 24, command: 'continue', arguments: { threadId: 1 } });
+        const resume = await backend.next();
+        await writer.write({ type: 'response', seq: 93, request_seq: resume.seq, command: 'continue', success: true });
+        assert.equal((await client.next()).request_seq, 24);
 
         if (transport === 'tcp') {
             connection.end();

@@ -2,6 +2,7 @@ import * as net from 'net';
 import * as vscode from 'vscode';
 import { StreamMessageReader, StreamMessageWriter } from 'vscode-jsonrpc/node';
 import { DapThreadRefresh } from './dapThreadRefresh';
+import { DebugConsoleOutput } from './debugConsoleOutput';
 
 export type DebugEndpoint = { host: string; port: number } | { socket: string };
 
@@ -17,12 +18,13 @@ export class BspDebugAdapter implements vscode.DebugAdapter {
     private reader?: StreamMessageReader;
     private writer?: StreamMessageWriter;
     private bridge: DapThreadRefresh;
+    private console: DebugConsoleOutput;
     private ended = false;
     private terminated = false;
 
     private commands = new Map<number, string>();
 
-    constructor(private endpoint: DebugEndpoint, private options?: BspDebugAdapterOptions) {
+    constructor(private endpoint: DebugEndpoint, private options?: BspDebugAdapterOptions, logDirectory?: string) {
         this.bridge = new DapThreadRefresh(
             message => { void this.writer!.write(message as any).catch(error => this.fail(error)); },
             message => {
@@ -42,6 +44,7 @@ export class BspDebugAdapter implements vscode.DebugAdapter {
                 this.messages.fire(message);
             }
         );
+        this.console = new DebugConsoleOutput(message => this.bridge.fromBackend(message), logDirectory);
     }
 
     handleMessage(message: any): void {
@@ -76,6 +79,7 @@ export class BspDebugAdapter implements vscode.DebugAdapter {
 
     dispose(): void {
         this.ended = true;
+        this.console.dispose();
         this.bridge.dispose();
         this.commands.clear();
         this.reader?.dispose();
@@ -90,7 +94,7 @@ export class BspDebugAdapter implements vscode.DebugAdapter {
         this.connection = socket;
         this.reader = new StreamMessageReader(socket);
         this.writer = new StreamMessageWriter(socket);
-        this.reader.listen(message => this.bridge.fromBackend(message));
+        this.reader.listen(message => this.console.accept(message));
         this.reader.onError(error => this.fail(error));
         socket.on('error', error => this.fail(error));
         socket.on('close', () => this.fail());
@@ -99,6 +103,7 @@ export class BspDebugAdapter implements vscode.DebugAdapter {
     private fail(error?: Error): void {
         if (this.ended) { return; }
         this.ended = true;
+        this.console.dispose();
         if (error) {
             this.bridge.fromBackend({ type: 'event', event: 'output', body: {
                 category: 'stderr', output: `BSP debug connection failed: ${error.message}\n`

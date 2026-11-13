@@ -295,7 +295,7 @@ async function initializeBspExtension(context: vscode.ExtensionContext) {
     const debugConfigProvider = new BspDebugConfigurationProvider(
         (folder, token, options) => resolver.prepareDebug(options, folder, token)
     );
-    const debugAdapterFactory = new BspDebugAdapterDescriptorFactory(debugConfigProvider);
+    const debugAdapterFactory = new BspDebugAdapterDescriptorFactory(debugConfigProvider, context.logUri.fsPath);
 
     context.subscriptions.push(
         vscode.debug.registerDebugConfigurationProvider('bsp-debug', debugConfigProvider),
