@@ -46,6 +46,10 @@ export function logInfo(message: string) {
     log(message);
 }
 
+export function logCommunication(level: 'info' | 'warn' | 'error', message: string) {
+    outputChannel?.[level](message);
+}
+
 export function logWarning(message: string) {
     outputChannel?.warn(message);
     console.warn(`[${new Date().toLocaleTimeString()}] WARNING: ${message}`);
