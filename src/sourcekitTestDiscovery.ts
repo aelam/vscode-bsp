@@ -14,6 +14,7 @@ import { object, testLocation } from './bspTestRun';
 import type { DiscoveredTest, TestDiscovery, TestDiscoveryFactory, TestSelection } from './testDiscovery';
 
 const dataKind = 'sourcekit-test-selection';
+const requestTimeoutMs = 120_000;
 class DiscoveryTimeoutError extends Error {}
 function supports(target: BuildTarget): boolean {
     const discovery = object(object(target.data)?.testDiscovery);
@@ -177,7 +178,7 @@ class SourceKitTestDiscovery implements TestDiscovery {
                     const abort = () => { cancellation.cancel(); reject(new Error('Test discovery cancelled')); };
                     cancel = token.onCancellationRequested(abort);
                     if (token.isCancellationRequested) { abort(); }
-                    timer = setTimeout(() => { cancellation.cancel(); reject(new DiscoveryTimeoutError(`Test discovery timed out: ${context}`)); }, 30000);
+                    timer = setTimeout(() => { cancellation.cancel(); reject(new DiscoveryTimeoutError(`Test discovery timed out: ${context}`)); }, requestTimeoutMs);
                 })
             ]);
         } catch (error) {
