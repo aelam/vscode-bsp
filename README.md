@@ -158,6 +158,14 @@ theme colors and filtering. Compiler diagnostics appear in **Problems** with
 source locations. The client uses the server's severity and does not parse
 build-tool output; raw output without a level stays informational.
 
+**Output → vscode-bsp** records the server process, initialization, request
+methods, response times, cancellation, and connection closure. Requests that
+remain pending for 10 seconds produce a waiting message, then another every
+30 seconds. These messages do not cancel the request. Request numbers identify
+entries in this log; they are not JSON-RPC IDs. Request and response payloads
+are not dumped. This channel covers the extension's connections; SourceKit-LSP
+uses its own connection and logs.
+
 Choose **Reveal Build Output** on a target to open a product location in the
 system file manager. This requires `outputPathsProvider` and
 `buildTarget/outputPaths`; the client does not guess output paths.

@@ -1,4 +1,5 @@
 import { BspStdio } from './bspStdio';
+import { BspCommunicationLog, logText } from './bspCommunicationLog';
 import { BuildContexts, buildContextExtension, buildContextVersion, ContextBuildPolicy, ContextOperation, ContextScope, ContextPreferenceStorage, ResolvedContext } from './buildContext';
 import { BspOperationOptions, BspTestEvent, BspTestOptions } from './bspTestEvents';
 import { testTaskMessage } from './bspTestReports';
@@ -19,7 +20,7 @@ import { BspTargetOperations, TargetBusyError, TargetOperationKind } from './bsp
 import { BspDebugSessions } from './bspDebugSessions';
 import { BspDiagnostics } from './bspDiagnostics';
 import { spawn, ChildProcess } from 'child_process';
-import { buildLog, log, logError, logInfo, showBuildOutput } from './logger';
+import { buildLog, log, logCommunication, logError, logInfo, showBuildOutput } from './logger';
 import {
     BuildTarget,
     WorkspaceBuildTargetsResult,
@@ -75,11 +76,21 @@ export class BspClient {
     private testOrigins = new Set<string>();
     private operationOutput = new Map<string, (message: string) => void>();
     private testTasks = new Set<string>();
+    private communication = new BspCommunicationLog(
+        () => `${this.connectionDetails?.name ?? 'server'} ${this.configPath ?? this.workspaceUri.fsPath}`,
+        logCommunication
+    );
     prepareExecutionContext?: (scope: ContextScope, operation: ContextOperation, token: CancellationToken) => Promise<boolean>;
     readonly contexts = new BuildContexts(<T>(method: string, params: unknown, token: CancellationToken): Promise<T> => {
         if (!this.connection) { return Promise.reject(new Error('BSP client not connected')); }
-        return this.connection.sendRequest<T>(method, params, token);
+        return this.sendRequest<T>(method, params, token);
     });
+
+    private sendRequest<T>(method: string, params?: unknown, token: CancellationToken = CancellationToken.None): Promise<T> {
+        const connection = this.connection;
+        if (!connection) { return Promise.reject(new Error('BSP client not connected')); }
+        return this.communication.request(method, () => connection.sendRequest<T>(method, params, token), token);
+    }
 
     onTestEvent(listener: (event: BspTestEvent) => void): vscode.Disposable {
         this.testListeners.add(listener);
@@ -143,6 +154,7 @@ export class BspClient {
             this.emitTestEvent({ kind: 'connected' });
             logInfo('✅ BSP client connected successfully');
         } catch (error) {
+            this.communication.close('connection failed');
             logError('❌ Failed to connect BSP client', error);
             throw error;
         }
@@ -156,7 +168,7 @@ export class BspClient {
         try {
             if (this.connection) {
                 // Send shutdown request
-                await this.connection.sendRequest('build/shutdown');
+                await this.sendRequest('build/shutdown');
                 
                 // Send exit notification
                 this.connection.sendNotification('build/exit');
@@ -187,10 +199,10 @@ export class BspClient {
 
         try {
             log('📦 BSP Client: Requesting build targets...');
-            const result: WorkspaceBuildTargetsResult = await this.connection.sendRequest('workspace/buildTargets', undefined, token ?? CancellationToken.None);
+            const result: WorkspaceBuildTargetsResult = await this.sendRequest('workspace/buildTargets', undefined, token ?? CancellationToken.None);
             this.buildTargets = result.targets;
             this.emitTestEvent({ kind: 'targets' });
-            log(`✅ BSP Client: Found ${this.buildTargets.length} build targets: ${this.buildTargets.map(t => t.displayName || t.id.uri).join(', ')}`);
+            this.communication.event(`Build targets loaded: ${this.buildTargets.length}`);
             
             // Notify that targets have been updated
             if (this.onTargetsUpdated) {
@@ -206,7 +218,7 @@ export class BspClient {
 
     async getSources(targets: Pick<BuildTarget, 'id'>[], token?: CancellationToken): Promise<SourcesItem[]> {
         if (!this.connection) { throw new Error('BSP client not connected'); }
-        const result = await this.connection.sendRequest<{ items: SourcesItem[] }>(
+        const result = await this.sendRequest<{ items: SourcesItem[] }>(
             'buildTarget/sources', { targets: targets.map(target => target.id) }, token ?? CancellationToken.None
         );
         return result.items;
@@ -217,7 +229,7 @@ export class BspClient {
         if (!this.serverCapabilities.outputPathsProvider) {
             throw new Error('This BSP server does not provide build output paths');
         }
-        const result: OutputPathsResult = await this.connection.sendRequest('buildTarget/outputPaths', {
+        const result: OutputPathsResult = await this.sendRequest('buildTarget/outputPaths', {
             targets: [target.id]
         });
         const paths = result.items.filter(item => item.target.uri === target.id.uri).flatMap(item => item.outputPaths);
@@ -243,7 +255,7 @@ export class BspClient {
             try {
                 if (!this.connection) { throw new Error('BSP client not connected'); }
                 const params: CleanCacheParams = { targets: [target.id] };
-                const result = await this.connection.sendRequest<CleanCacheResult>('buildTarget/cleanCache', params);
+                const result = await this.sendRequest<CleanCacheResult>('buildTarget/cleanCache', params);
                 if (result?.cleaned !== true) {
                     throw new Error(result?.message || 'The build server did not clean the cache');
                 }
@@ -266,7 +278,7 @@ export class BspClient {
             }
 
             log('🔄 Starting workspace reload...');
-            await this.connection.sendRequest('workspace/reload', cancellation);
+            await this.sendRequest('workspace/reload', undefined, cancellation);
             
             // Refresh build targets after reload
             await this.getBuildTargets();
@@ -294,7 +306,7 @@ export class BspClient {
 
             if (cancellation.isCancellationRequested) { throw new Error('Build cancelled'); }
             log(`🔨 Starting compilation for ${target.displayName || targetId}`);
-            const result: CompileResult = await this.connection.sendRequest('buildTarget/compile', params, cancellation);
+            const result: CompileResult = await this.sendRequest('buildTarget/compile', params, cancellation);
             this.handleCompileResult(result, options.native);
             return result;
         }, { ...options, token });
@@ -324,7 +336,7 @@ export class BspClient {
                 }
                 const params: TestParams = { targets: [target.id], originId, arguments: [], ...options.selection };
                 log(`Starting tests for ${target.displayName || targetId}`);
-                const result: TestResult = await this.connection.sendRequest('buildTarget/test', params, cancellation);
+                const result: TestResult = await this.sendRequest('buildTarget/test', params, cancellation);
                 status = result.statusCode;
                 if (!options.native) { this.handleTestResult(result); }
                 return result;
@@ -391,7 +403,7 @@ export class BspClient {
             if (!options.onOutput) { showBuildOutput(); }
             buildLog(`▶ Run: ${target.displayName || targetId}`);
             log(`🏃 Starting run for ${target.displayName || targetId}`);
-            const result: RunResult = await this.connection.sendRequest('buildTarget/run', params, cancellation);
+            const result: RunResult = await this.sendRequest('buildTarget/run', params, cancellation);
             this.handleRunResult(result, options.native);
             return result;
         }, { ...options, token });
@@ -485,10 +497,9 @@ export class BspClient {
         if (token.isCancellationRequested) { throw new Error('Debug cancelled'); }
         try {
             log(`🐛 Starting debug for ${target.displayName || targetId}`);
-            const result: DebugSessionAddressResult = await this.connection.sendRequest(
+            const result: DebugSessionAddressResult = await this.sendRequest(
                 'debugSession/start', params, token
             );
-            log(`🐛 debugSession/start result: ${JSON.stringify(result)}`);
             return result;
         } catch (error) {
             logError('Failed to start debug session', error);
@@ -544,7 +555,7 @@ export class BspClient {
                     ? { target: resolved.targets[0], originId, executionContext }
                     : { targets: resolved.targets, originId, ...(operation === 'test' ? options.selection : {}), executionContext };
                 if (operation === 'debug') {
-                    const result = await this.connection.sendRequest<DebugSessionAddressResult>('debugSession/start', params, cancellation);
+                    const result = await this.sendRequest<DebugSessionAddressResult>('debugSession/start', params, cancellation);
                     if (cancellation.isCancellationRequested) { await this.cancelDebugResult(result); }
                     if (startDebug) {
                         const configuration = this.configurationForDebugResult(result, resolved.targets[0].uri, debugRequest, buildPolicy);
@@ -557,7 +568,7 @@ export class BspClient {
                     }
                     return result;
                 }
-                const result = await this.connection.sendRequest<CompileResult | TestResult | RunResult>(
+                const result = await this.sendRequest<CompileResult | TestResult | RunResult>(
                     `buildTarget/${operation}`, params, cancellation);
                 testStatus = result.statusCode;
                 if (operation === 'compile') { this.handleCompileResult(result, options.native); }
@@ -626,11 +637,13 @@ export class BspClient {
         }
 
         const [command, ...args] = this.connectionDetails.argv;
+        this.communication.event(`Starting process: command=${logText(command)} cwd=${logText(this.workspaceUri.fsPath)} arguments=${args.length}`);
         
         this.serverProcess = spawn(command, args, {
             cwd: this.workspaceUri.fsPath,
             stdio: ['pipe', 'pipe', 'pipe']
         });
+        this.communication.event(`Process started: pid=${this.serverProcess.pid ?? 'unavailable'}`);
 
         if (!this.serverProcess.stdout || !this.serverProcess.stdin || !this.serverProcess.stderr) {
             throw new Error('Failed to create BSP server process streams');
@@ -643,7 +656,7 @@ export class BspClient {
         });
 
         this.serverProcess.on('exit', (code, signal) => {
-            log(`BSP server exited with code ${code}, signal ${signal}`);
+            this.communication.event(`Process exited: pid=${serverProcess.pid ?? 'unavailable'} code=${code} signal=${signal}`);
             this.clearTaskState();
             this.connection?.dispose();
             this.isConnected = false;
@@ -672,6 +685,7 @@ export class BspClient {
         const writer = new StreamMessageWriter(this.serverProcess.stdin);
         this.connection = createMessageConnection(reader, writer);
         this.connection.onClose(() => {
+            this.communication.event('Transport closed');
             this.isConnected = false;
             this.clearTaskState();
         });
@@ -700,13 +714,16 @@ export class BspClient {
         };
 
         try {
-            const result: InitializeBuildResult = await this.connection.sendRequest('build/initialize', initParams);
+            const result: InitializeBuildResult = await this.sendRequest('build/initialize', initParams);
             this.serverCapabilities = result.capabilities;
             this.contexts.negotiate(result.data);
-            log(`BSP server initialized: ${JSON.stringify(result)}`);
+            const capabilities = Object.entries(result.capabilities)
+                .filter(([, enabled]) => !!enabled).map(([name]) => name).join(', ');
+            this.communication.event(`Initialized: server=${logText(result.displayName)} version=${logText(result.version)} BSP=${logText(result.bspVersion)} capabilities=[${capabilities}]`);
 
             // Send initialized notification
-            this.connection.sendNotification('build/initialized');
+            await this.connection.sendNotification('build/initialized');
+            this.communication.event('Notification sent: build/initialized');
         } catch (error) {
             logError('Failed to initialize BSP connection', error);
             throw error;
@@ -719,6 +736,7 @@ export class BspClient {
         }
 
         this.connection.onNotification('buildTarget/didChange', () => {
+            this.communication.event('Notification received: buildTarget/didChange; refreshing targets');
             void this.getBuildTargets().catch(error => logError('Failed to refresh changed targets', error));
         });
 
@@ -976,6 +994,7 @@ export class BspClient {
     }
 
     private clearTaskState(): void {
+        this.communication.close('connection closed');
         this.contexts.disconnect();
         this.operationOutput.clear();
         this.emitTestEvent({ kind: 'disconnected' });
