@@ -248,7 +248,7 @@ test('document timeouts close and stop the session before the next explicit disc
     const originalTimeout = global.setTimeout;
     let timeout;
     global.setTimeout = (callback, delay, ...args) => {
-        if (delay === 30000) { timeout = () => callback(...args); }
+        if (delay === 120000) { timeout = () => callback(...args); }
         return originalTimeout(callback, delay, ...args);
     };
     t.after(() => { global.setTimeout = originalTimeout; });
@@ -283,7 +283,7 @@ test('an initialize timeout stops the incomplete session and a later discovery i
     const originalTimeout = global.setTimeout;
     let timeout, fail = true;
     global.setTimeout = (callback, delay, ...args) => {
-        if (delay === 30000) { timeout = () => callback(...args); }
+        if (delay === 120000) { timeout = () => callback(...args); }
         return originalTimeout(callback, delay, ...args);
     };
     t.after(() => { global.setTimeout = originalTimeout; });

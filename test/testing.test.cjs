@@ -284,7 +284,7 @@ test('uses failure locations supplied only in test-finish', async () => {
     s.testing.dispose();
 });
 
-function discoverable() {
+function discoverable(targets = [target()]) {
     const change = emitter();
     const leaf = (id, line) => ({ id, label: 'Same display name', uri: vscode.Uri.parse('file:///Tests.swift'),
         range: new Range(line, 0, line + 2, 1), disabled: false, children: [], selector: { id } });
@@ -294,7 +294,7 @@ function discoverable() {
         selection(target, tests) { return { dataKind: 'fake-selection', data: { target: target.id, ids: tests.map(t => t.id) } }; },
         dispose() { this.disposed = true; }
     };
-    const c = client(), changes = emitter(), updates = emitter();
+    const c = client(targets), changes = emitter(), updates = emitter();
     const connections = [{ id: 'server', client: c, connected: true, config: { name: 'Server' } }];
     const manager = { getAllConnections: () => connections, onDidChangeConnections: changes.event, onDidUpdateTargets: updates.event };
     const testing = new BspTesting(manager, undefined, [() => provider]);
@@ -322,6 +322,66 @@ test('discovery supplies gutter locations and single-case results update the exi
     await s.controller.refreshHandler(CancellationToken.None);
     assert.equal([...s.leaves().values()][0], first); assert.equal(first.range.start.line, 10);
     s.testing.dispose(); assert.equal(s.provider.disposed, true);
+});
+
+test('discovery publishes each target before the next finishes and isolates failures', async t => {
+    const s = discoverable([target('First'), target('Second'), target('Third')]);
+    t.after(() => s.testing.dispose());
+    const items = () => [...s.controller.items.values()][0].children;
+    let reached, release;
+    const started = new Promise(resolve => { reached = resolve; });
+    const blocked = new Promise(resolve => { release = resolve; });
+    const calls = [];
+    s.provider.discover = async targets => {
+        calls.push(targets.map(t => t.displayName));
+        if (targets.some(t => t.displayName === 'Second')) {
+            reached(); await blocked;
+            throw new Error('Test discovery timed out: textDocument/tests (file:///Second.swift)');
+        }
+        return new Map(targets.map(t => [t.id.uri, s.provider.tests]));
+    };
+    const refresh = s.controller.refreshHandler(CancellationToken.None);
+    try {
+        await started;
+        const [first, second, third] = [...items().values()];
+        assert.equal(first.children.size, 1, 'Completed targets must appear before the full scan finishes');
+        assert.equal(first.busy, false);
+        assert.equal(second.busy, true);
+        release(); await refresh;
+        assert.match(second.error, /timed out.*Second\.swift/);
+        assert.equal(second.busy, false);
+        assert.equal(third.children.size, 1, 'A failed target must not prevent later discovery');
+        assert.equal(first.error, undefined);
+        assert.equal(third.error, undefined);
+        assert.deepEqual(calls, [['First'], ['Second'], ['Third']]);
+    } finally { release(); await refresh; }
+});
+
+test('a failed refresh preserves existing tests and cancellation stops the remaining targets', async t => {
+    const s = discoverable([target('First'), target('Second'), target('Third')]);
+    t.after(() => s.testing.dispose());
+    await s.controller.refreshHandler(CancellationToken.None);
+    const [first, second, third] = [...[...s.controller.items.values()][0].children.values()];
+    const previous = [...first.children.values()];
+    const cancellation = new CancellationTokenSource();
+    t.after(() => cancellation.dispose());
+    const calls = [];
+    s.provider.discover = async targets => {
+        calls.push(targets.map(t => t.displayName));
+        if (targets[0].displayName === 'First') { throw new Error('Test discovery timed out'); }
+        cancellation.cancel();
+        return new Map(targets.map(t => [t.id.uri, []]));
+    };
+    await s.controller.refreshHandler(cancellation.token);
+    assert.deepEqual([...first.children.values()], previous);
+    assert.match(first.error, /timed out/);
+    assert.equal(first.busy, false);
+    assert.equal(second.busy, false);
+    assert.equal(second.error, undefined);
+    assert.equal(second.children.size, 1, 'Cancelled results must not replace the previous tests');
+    assert.equal(third.children.size, 1);
+    assert.equal(third.error, undefined);
+    assert.deepEqual(calls, [['First'], ['Second']]);
 });
 
 test('suite selection and exclusions send only the remaining runnable cases', async () => {
