@@ -256,6 +256,7 @@ test('required unknown kinds block direct target, test, and debug entry points',
 
 function manager(clients) {
     const changes = new Emitter(), updates = new Emitter(), operations = new Emitter(), background = new Emitter();
+    for (const client of clients) { client.operations.onDidChange(() => operations.fire()); }
     const connections = clients.map((client, i) => ({ client, id: 'connection-' + i, connectionId: 'connection-' + i,
         connected: true, config: { name: 'Workspace ' + i, displayName: 'Workspace ' + i } }));
     return { onDidChangeConnections: changes.event, onDidUpdateTargets: updates.event,
@@ -1484,4 +1485,58 @@ test('Recent history persists by connection, workspace, target scope, and field'
     assert.deepEqual(create('server-B').recentOptions({}, 'mode'), []);
     assert.deepEqual(create('server-A', 'file:///other-workspace').recentOptions({}, 'mode'), []);
     assert.deepEqual(restored.getSelection({}), {}, 'History must not select configuration values');
+});
+
+test('Build Context hides execution while busy, rejects duplicate clicks, and restores cached capabilities', async () => {
+    const c = client(), other = client(), connections = manager([c, other]);
+    const provider = new BuildContextProvider(connections), tree = new MultiBspProvider(connections, undefined, provider);
+    const [root, idle] = await provider.getChildren();
+    const capabilities = root.contextValue;
+    let finish;
+    const send = c.connection.sendRequest;
+    c.connection.sendRequest = (method, params, token) => {
+        if (method !== 'buildTarget/compile') { return send(method, params, token); }
+        c.requests.push({ method, params, token });
+        return new Promise(resolve => { finish = resolve; });
+    };
+    let updates = 0;
+    provider.onDidChangeTreeData(() => updates++);
+    const pending = provider.execute(root, 'compile');
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(typeof finish, 'function');
+    assert.ok(updates > 0);
+    assert.match(tree.getTreeItem(root).contextValue, /busy/);
+    assert.doesNotMatch(tree.getTreeItem(idle).contextValue, /busy/);
+    const requests = c.requests.length;
+    for (const operation of ['compile', 'run', 'test', 'debug']) {
+        await assert.rejects(provider.execute(root, operation), /Wait for the current operation/);
+    }
+    assert.equal(c.requests.length, requests);
+    c.operations.cancel('workspace');
+    assert.match(tree.getTreeItem(root).contextValue, /busy/);
+    await assert.rejects(provider.execute(root, 'run', 'reuse'), /Wait for the current operation/);
+    finish({ statusCode: 3 }); await pending;
+    assert.equal(tree.getTreeItem(root).contextValue, capabilities);
+    assert.equal(c.requests.length, requests, 'Busy updates must not reload configuration');
+    await provider.execute(root, 'run');
+    const menus = require('../package.json').contributes.menus['view/item/context'];
+    for (const menu of menus.filter(menu => /^bsp\.context(?:Compile|Run|Test|Debug)/.test(menu.command))) {
+        assert.match(menu.when, /!\(viewItem =~ \/busy\/\)/);
+    }
+    tree.dispose(); provider.dispose();
+});
+
+test('Build Context rechecks active target operations after loading configuration', async () => {
+    const c = client(), provider = new BuildContextProvider(manager([c]));
+    const [root] = await provider.getChildren();
+    let releaseOptions, releaseTarget;
+    c.contextOptions = params => new Promise(resolve => { releaseOptions = () => resolve(options(params.selection)); });
+    const pending = provider.execute(root, 'run');
+    const active = c.operations.run(id.uri, 'compile', () => new Promise(resolve => { releaseTarget = resolve; }));
+    releaseOptions();
+    await assert.rejects(pending, /Wait for the current operation/);
+    assert.ok(!c.requests.some(request => request.method === 'workspace/resolveContext'));
+    await assert.rejects(c.executeContext('run'), /Wait for the current operation/);
+    releaseTarget(); await active;
+    provider.dispose();
 });

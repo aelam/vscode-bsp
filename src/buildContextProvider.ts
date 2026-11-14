@@ -6,6 +6,7 @@ import type { BspConnectionManager } from './bspConnectionManager';
 import type { BuildTarget } from './bspTypes';
 import { ContextBuildPolicy, ContextDimension, ContextOperation, ContextScope, ContextOptions } from './buildContext';
 import { contextOptionGroups, contextOptionPresentation, contextOptionTooltip } from './buildContextPresentation';
+import { TargetBusyError, TargetOperation } from './bspTargetOperations';
 
 interface ScopeEntry { connectionId: string; client: BspClient; label: string; scope: ContextScope; target?: BuildTarget }
 interface ContextPickItem extends vscode.QuickPickItem { option?: ContextDimension['options'][number] }
@@ -50,7 +51,9 @@ export class BuildContextProvider implements vscode.TreeDataProvider<ContextTree
     }>();
 
     constructor(private manager: BspConnectionManager, private legacy?: BspClient) {
-        this.subscriptions = [manager.onDidChangeConnections(() => this.refresh()), manager.onDidUpdateTargets(() => this.refresh())];
+        this.subscriptions = [manager.onDidChangeConnections(() => this.refresh()), manager.onDidUpdateTargets(() => this.refresh()),
+            manager.onDidChangeOperations(() => this.changes.fire(undefined))];
+        if (legacy) { this.subscriptions.push(legacy.operations.onDidChange(() => this.changes.fire(undefined))); }
         if (legacy) { this.subscriptions.push(legacy.onTestEvent(event => {
             if (['connected', 'disconnected', 'targets'].includes(event.kind)) { this.refresh(); }
         })); }
@@ -72,7 +75,22 @@ export class BuildContextProvider implements vscode.TreeDataProvider<ContextTree
         for (const [client, previous] of this.hooked) { client.prepareExecutionContext = previous; }
         this.hooked.clear(); this.scopeItems.clear(); this.scopeLoads.clear(); this.changes.dispose();
     }
-    getTreeItem(item: ContextTreeItem): vscode.TreeItem { return item; }
+    getTreeItem(item: ContextTreeItem): vscode.TreeItem {
+        if (item.dimension) { return item; }
+        return { ...item, contextValue: item.contextValue + (this.busyOperation(item) ? ' busy' : '') };
+    }
+
+    private busyOperation(item: ContextTreeItem): TargetOperation | undefined {
+        const operations = item.entry.client.operations;
+        return item.entry.scope.targets?.length
+            ? item.entry.scope.targets.map(target => operations.get(target.uri)).find(operation => operation !== undefined)
+            : operations.first;
+    }
+
+    private requireIdle(item: ContextTreeItem): void {
+        const operation = this.busyOperation(item);
+        if (operation) { throw new TargetBusyError(operation.message, operation.cancellable); }
+    }
 
     getConnectionItem(connectionId: string): ContextTreeItem | undefined {
         const entry = this.entries().find(entry => entry.connectionId === connectionId);
@@ -277,12 +295,14 @@ export class BuildContextProvider implements vscode.TreeDataProvider<ContextTree
     }
 
     async execute(item: ContextTreeItem, operation?: ContextOperation, buildPolicy: ContextBuildPolicy = 'build'): Promise<void> {
+        this.requireIdle(item);
         if (operation) { item.entry.client.contexts.requireBuildPolicy(operation, buildPolicy); }
         const shared = await item.entry.client.contexts.options(item.entry.scope);
         const available = this.operations(item.entry, shared);
         const selected = operation ?? (await vscode.window.showQuickPick(available.map(operation => ({ label: operation, operation })),
             { placeHolder: 'Select an operation' }))?.operation;
         if (!selected) { return; }
+        this.requireIdle(item);
         if (!available.includes(selected)) { throw new Error(`This scope does not support ${selected}`); }
         await item.entry.client.executeContext(selected, item.entry.scope, undefined, {}, true, [], buildPolicy);
     }

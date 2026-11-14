@@ -145,12 +145,18 @@ builds. See [build policies](#build-policies).
 
 ### Progress and build output
 
-Operations show their phase and a cancel action. A target stays busy until its
-request finishes, including after cancellation. Different targets and connections
-can run concurrently; the server controls build scheduling.
+Each connection header shows a spinner and the current operation or task count.
+Its cancel action stops the only cancellable operation, or opens a picker when
+several operations can be cancelled. The picker can cancel one operation or all
+cancellable operations on that connection. Target rows show task text with their
+normal icons. Build Context execution actions are hidden while the scope is busy.
+A target stays busy until its request finishes, including after cancellation.
+Different targets and connections can run concurrently; the server controls build
+scheduling.
 
-Background tasks appear in the status bar. Percentages require a server-provided
-total. BSP index preparation is separate from SourceKit-LSP code indexing, and
+Background tasks appear in the connection header and status bar. They have no
+cancel action. Percentages require a server-provided total; otherwise, the header
+shows the task's phase. BSP index preparation is separate from SourceKit-LSP code indexing, and
 tasks on SourceKit-LSP's connection are not visible here.
 
 `build/logMessage` appears in **Output → vscode-bsp-log**. Log levels control

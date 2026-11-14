@@ -16,6 +16,7 @@ export class TargetBusyError extends Error {
 export class TargetOperation {
     readonly cancellation = new CancellationTokenSource();
     message: string;
+    percent?: number;
     cancelling = false;
 
     constructor(readonly kind: TargetOperationKind, private changed: () => void) {
@@ -25,9 +26,19 @@ export class TargetOperation {
 
     get cancellable(): boolean { return this.kind !== 'clean'; }
 
-    report(message?: string): void {
-        if (!message || this.cancelling || message === this.message) { return; }
-        this.message = message;
+    get description(): string {
+        const percent = this.percent === undefined || this.cancelling ? '' : ` · ${Math.floor(this.percent)}%`;
+        return this.message.replace(/\s+/g, ' ') + percent;
+    }
+
+    report(message?: string, increment?: number): void {
+        if (this.cancelling) { return; }
+        const nextMessage = message || this.message;
+        const nextPercent = increment !== undefined && Number.isFinite(increment) && increment >= 0
+            ? Math.min(100, (this.percent ?? 0) + increment) : this.percent;
+        if (nextMessage === this.message && nextPercent === this.percent) { return; }
+        this.message = nextMessage;
+        this.percent = nextPercent;
         this.changed();
     }
 
@@ -53,10 +64,19 @@ export class BspTargetOperations {
 
     get first(): TargetOperation | undefined { return this.active.values().next().value; }
 
+    get entries(): { targetId: string; operation: TargetOperation }[] {
+        const seen = new Set<TargetOperation>();
+        return [...this.active].flatMap(([targetId, operation]) => {
+            if (seen.has(operation)) { return []; }
+            seen.add(operation);
+            return [{ targetId, operation }];
+        });
+    }
+
     get(targetId: string): TargetOperation | undefined { return this.exclusive ?? this.active.get(targetId); }
 
     async run<T>(targetId: string, kind: TargetOperationKind, action: (operation: TargetOperation) => Promise<T>): Promise<T> {
-        const current = this.get(targetId) ?? (kind === 'clean' ? this.first : undefined);
+        const current = this.get(targetId) ?? (kind === 'clean' || targetId === 'workspace' ? this.first : undefined);
         if (current) { throw new TargetBusyError(current.message, current.cancellable); }
         const operation = new TargetOperation(kind, () => {
             if (this.active.get(targetId) === operation) { this.changed(targetId); }

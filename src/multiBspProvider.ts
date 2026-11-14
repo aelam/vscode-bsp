@@ -4,6 +4,7 @@ import { BspConnectionManager, BspConnection } from './bspConnectionManager';
 import { BuildTarget, BuildTargetIdentifier } from './bspTypes';
 import { logError, logInfo } from './logger';
 import { BuildContextProvider, ContextTreeItem } from './buildContextProvider';
+import { connectionActivity } from './bspConnectionActivity';
 
 export type BspExplorerItem = BspTreeItem | ContextTreeItem;
 
@@ -148,9 +149,10 @@ export class MultiBspProvider implements vscode.TreeDataProvider<BspExplorerItem
     }
 
     getTreeItem(element: BspExplorerItem): vscode.TreeItem {
-        if (element instanceof ContextTreeItem) { return element; }
+        if (element instanceof ContextTreeItem) { return this.contexts?.getTreeItem(element) ?? element; }
         const target = element.buildTarget;
         const connection = element.connectionId ? this.connectionManager.getConnection(element.connectionId) : undefined;
+        if (element.type === 'connection' && connection) { return this.updateConnectionItem(element, connection); }
         if (!target || !connection?.connected) { return element; }
         const operation = connection.client.operations.get(target.id.uri);
         if (element.type === 'buildTarget' && !/loading|disconnected/.test(element.contextValue ?? '')) {
@@ -174,9 +176,8 @@ export class MultiBspProvider implements vscode.TreeDataProvider<BspExplorerItem
             if (operation) {
                 element.contextValue += operation.cancelling ? ' busy cancelling' : ' busy';
                 if (!operation.cancellable) { element.contextValue += ' nonCancellable'; }
-                element.description = operation.message.replace(/\s+/g, ' ');
-                element.iconPath = new vscode.ThemeIcon('loading~spin');
-                element.tooltip += `\n${operation.message}`;
+                element.description = operation.description;
+                element.tooltip += `\n${operation.description}`;
             }
         }
         return element;
@@ -228,13 +229,23 @@ export class MultiBspProvider implements vscode.TreeDataProvider<BspExplorerItem
             
             item.id = JSON.stringify(['connection', connection.id]);
             item.connectionId = connection.id;
-            item.description = this.getConnectionDescription(connection);
-            item.tooltip = this.getConnectionTooltip(connection);
-            item.contextValue = this.getConnectionContextValue(connection);
-            item.iconPath = this.getConnectionIcon(connection);
-            
-            return item;
+            return this.updateConnectionItem(item, connection);
         });
+    }
+
+    private updateConnectionItem(item: BspTreeItem, connection: BspConnection): BspTreeItem {
+        item.description = this.getConnectionDescription(connection);
+        item.tooltip = this.getConnectionTooltip(connection);
+        item.contextValue = this.getConnectionContextValue(connection);
+        item.iconPath = this.getConnectionIcon(connection);
+        const activity = connection.connected ? connectionActivity(connection.client) : undefined;
+        if (activity) {
+            item.description = activity.description;
+            item.tooltip += `\n\n${activity.tooltip}`;
+            item.iconPath = new vscode.ThemeIcon('loading~spin');
+            item.contextValue += activity.canCancel ? ' busy canCancel' : ' busy';
+        }
+        return item;
     }
 
     private async getConnectionGroups(connectionId: string): Promise<BspExplorerItem[]> {
