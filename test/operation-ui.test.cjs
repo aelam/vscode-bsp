@@ -18,6 +18,7 @@ const bars = [], notices = [], warnings = [], errors = [], progressWindows = [],
 let outputShows = 0;
 let startDebugging = async () => true;
 let confirm = async () => undefined;
+let pickOperation = async () => undefined;
 const vscode = {
     EventEmitter: Emitter,
     TreeItem: class { constructor(label) { this.label = label; } },
@@ -29,6 +30,7 @@ const vscode = {
     debug: { onDidStartDebugSession: () => ({ dispose() {} }), onDidTerminateDebugSession: () => ({ dispose() {} }),
         startDebugging: (...args) => startDebugging(...args) },
     window: {
+        showQuickPick: (...args) => pickOperation(...args),
         withProgress: (options, task) => {
             const reports = []; progressWindows.push({ options, reports });
             return task({ report: update => reports.push(update) }, CancellationToken.None);
@@ -43,13 +45,14 @@ const vscode = {
 };
 const load = Module._load;
 Module._load = function(name, ...args) { return name === 'vscode' ? vscode : load.call(this, name, ...args); };
-let BspClient, MultiBspProvider, BspTreeItem, BspStatusBar, BspDebugConfigurationProvider, cleanBuildCache;
+let BspClient, MultiBspProvider, BspTreeItem, BspStatusBar, BspDebugConfigurationProvider, cleanBuildCache, cancelConnectionOperation;
 try {
     ({ BspClient } = require('../out/bspClient'));
     ({ MultiBspProvider, BspTreeItem } = require('../out/multiBspProvider'));
     ({ BspStatusBar } = require('../out/bspStatusBar'));
     ({ BspDebugConfigurationProvider } = require('../out/debugProvider'));
     ({ cleanBuildCache } = require('../out/cleanCache'));
+    ({ cancelConnectionOperation } = require('../out/bspConnectionActivity'));
     require('../out/logger').initializeBuildLogger({ info: message => output.push(message),
         error: message => output.push(message), warn: message => output.push(message), show() { outputShows++; } });
 } finally { Module._load = load; }
@@ -140,7 +143,7 @@ test('normal and favorite rows share busy state while other connections remain e
     const pending=a.compile(target());
     assert.ok(changes>0);
     for(const item of [row,favorite]) {
-        const rendered=provider.getTreeItem(item);assert.match(rendered.contextValue,/busy/);assert.equal(rendered.iconPath.id,'loading~spin');
+        const rendered=provider.getTreeItem(item);assert.match(rendered.contextValue,/busy/);assert.notEqual(rendered.iconPath.id,'loading~spin');
     }
     assert.doesNotMatch(provider.getTreeItem(other).contextValue,/busy/);
     a.operations.cancel(target().id.uri);
@@ -339,7 +342,8 @@ test('clean state appears on normal and favorite rows with no cancel action', as
     const cleanMenu = menus.find(m => m.command === 'bsp.cleanCache');
     assert.doesNotMatch(cleanMenu.group, /inline/);
     assert.match(cleanMenu.when, /canCleanCache/);
-    assert.match(menus.find(m => m.command === 'bsp.cancelOperation').when, /nonCancellable/);
+    assert.equal(menus.some(m => m.command === 'bsp.cancelOperation'), false);
+    assert.match(menus.find(m => m.command === 'bsp.cancelConnectionOperation').when, /canCancel/);
     c.requests[0].resolve({ cleaned: true }); await pending;
     assert.match(provider.getTreeItem(make('server-0', true)).contextValue, /canCleanCache/);
 });
@@ -508,4 +512,88 @@ test('Attach reuses its resolved Context without stopping a session or adding BS
         assert.equal(result.request, 'attach'); assert.equal(result.bspAttach, true);
         assert.equal(result.connect.port, 23456); assert.equal(requests.length, 1);
     } finally { c.debugSessions.dispose(); }
+});
+
+test('connection headers show request progress without Build Context and keep cancellation pending', async () => {
+    const c = client(), other = client(), provider = new MultiBspProvider(manager([c, other]));
+    const [header, idle] = await provider.getChildren();
+    const pending = c.compile(target()), request = c.requests[0];
+    let rendered = provider.getTreeItem(header);
+    assert.equal(rendered.description, 'Building');
+    assert.equal(rendered.iconPath.id, 'loading~spin');
+    assert.match(rendered.contextValue, /canCancel/);
+    assert.doesNotMatch(provider.getTreeItem(idle).contextValue, /busy/);
+    c.operations.includeTargets(target().id.uri, ['target://dependency']);
+    c.handlers.get('build/taskStart')({ taskId: { id: 'build' }, originId: request.params.originId, message: 'Build app' });
+    c.handlers.get('build/taskProgress')({ taskId: { id: 'build' }, progress: 2, total: 5 });
+    assert.equal(provider.getTreeItem(header).description, 'Build app · 40%');
+    assert.equal(c.operations.entries.length, 1);
+    c.handlers.get('build/taskStart')({ taskId: { id: 'child', parents: ['build'] }, message: 'Compile dependency' });
+    c.handlers.get('build/taskProgress')({ taskId: { id: 'child' }, progress: 9, total: 10 });
+    assert.equal(provider.getTreeItem(header).description, 'Compile dependency · 40%');
+    await cancelConnectionOperation(c);
+    assert.equal(request.token.isCancellationRequested, true);
+    rendered = provider.getTreeItem(header);
+    assert.equal(rendered.description, 'Cancelling…');
+    assert.match(rendered.contextValue, /busy/);
+    assert.doesNotMatch(rendered.contextValue, /canCancel/);
+    c.handlers.get('build/taskFinish')({ taskId: { id: 'build' }, status: 3 });
+    assert.match(provider.getTreeItem(header).contextValue, /busy/);
+    request.resolve({ statusCode: 3 }); await pending;
+    assert.equal(provider.getTreeItem(header).contextValue, 'connectedBspServer');
+    assert.equal(header.iconPath.id, 'server-environment');
+    provider.dispose();
+});
+
+test('connection cancellation selects one operation or all and never cancels a replacement', async () => {
+    const c = client(), other = client(), provider = new MultiBspProvider(manager([c]));
+    c.buildTargets = [target('one'), target('two')];
+    const pending = [c.compile(target('one')), c.compile(target('two')), other.compile(target('one'))];
+    const [header] = await provider.getChildren();
+    assert.equal(header.description, '2 tasks running');
+    pickOperation = async choices => choices.find(choice => choice.label === 'two');
+    try {
+        await cancelConnectionOperation(c);
+        assert.equal(c.requests[0].token.isCancellationRequested, false);
+        assert.equal(c.requests[1].token.isCancellationRequested, true);
+        assert.equal(other.requests[0].token.isCancellationRequested, false);
+        for (const request of [...c.requests, ...other.requests]) { request.resolve({ statusCode: 3 }); }
+        await Promise.all(pending);
+        const first = c.compile(target('one')), second = c.compile(target('two')), choice = deferred();
+        let staleChoices;
+        pickOperation = choices => { staleChoices = choices; return choice.promise; };
+        const cancelling = cancelConnectionOperation(c);
+        c.requests[2].resolve({ statusCode: 1 }); await first;
+        const replacement = c.compile(target('one'));
+        choice.resolve(staleChoices.find(choice => choice.label === 'Cancel all operations'));
+        await cancelling;
+        assert.equal(c.requests[3].token.isCancellationRequested, true);
+        assert.equal(c.requests[4].token.isCancellationRequested, false);
+        c.requests[3].resolve({ statusCode: 3 }); c.requests[4].resolve({ statusCode: 1 });
+        await Promise.all([second, replacement]);
+    } finally { pickOperation = async () => undefined; provider.dispose(); }
+});
+
+test('connection headers show background progress and clean status without a cancel action', async () => {
+    const c = client(), provider = new MultiBspProvider(manager([c]));
+    const [header] = await provider.getChildren();
+    const send = (method, params) => c.handlers.get(method)(params);
+    send('build/taskStart', { taskId: { id: 'index' }, message: 'Prepare indexing' });
+    send('build/taskProgress', { taskId: { id: 'index' }, progress: 1, total: 4 });
+    assert.equal(provider.getTreeItem(header).description, 'Prepare indexing · 25%');
+    assert.doesNotMatch(header.contextValue, /canCancel/);
+    const pending = c.compile(target());
+    assert.equal(provider.getTreeItem(header).description, '2 tasks running');
+    await cancelConnectionOperation(c);
+    assert.equal(c.requests[0].token.isCancellationRequested, true);
+    assert.equal(c.backgroundTasks.active.length, 1);
+    c.requests[0].resolve({ statusCode: 3 }); await pending;
+    send('build/taskFinish', { taskId: { id: 'index' }, status: 1 });
+    const clean = c.cleanCache(target());
+    assert.equal(provider.getTreeItem(header).description, 'Cleaning build cache');
+    assert.doesNotMatch(header.contextValue, /canCancel/);
+    await cancelConnectionOperation(c);
+    assert.equal(c.operations.first.cancelling, false);
+    c.requests[1].resolve({ cleaned: true }); await clean;
+    provider.dispose();
 });

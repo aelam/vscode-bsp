@@ -444,6 +444,12 @@
         "icon": "$(close)"
       },
       {
+        "command": "bsp.cancelConnectionOperation",
+        "title": "Cancel Connection Operation…",
+        "category": "BSP",
+        "icon": "$(close)"
+      },
+      {
         "command": "bsp.showBuildOutput",
         "title": "Show BSP Build Output",
         "category": "BSP"
@@ -628,6 +634,11 @@
           "group": "inline"
         },
         {
+          "command": "bsp.disconnectServer",
+          "when": "view == bspTargets && viewItem =~ /^connectedBspServer.*busy/",
+          "group": "connection@1"
+        },
+        {
           "command": "bsp.addToFavorites",
           "when": "view == bspTargets && viewItem =~ /buildTarget/ && !(viewItem =~ /favorite/)",
           "group": "favorites@1"
@@ -643,8 +654,8 @@
           "group": "connection@1"
         },
         {
-          "command": "bsp.cancelOperation",
-          "when": "view == bspTargets && viewItem =~ /buildTarget.*busy/ && !(viewItem =~ /cancelling/) && !(viewItem =~ /nonCancellable/)",
+          "command": "bsp.cancelConnectionOperation",
+          "when": "view == bspTargets && viewItem =~ /^connectedBspServer.*canCancel/",
           "group": "inline@1"
         },
         {
@@ -654,41 +665,45 @@
         },
         {
           "command": "bsp.contextCompile",
-          "when": "view == bspTargets && viewItem =~ /buildContextScope.*canCompile/",
+          "when": "view == bspTargets && viewItem =~ /buildContextScope.*canCompile/ && !(viewItem =~ /busy/)",
           "group": "inline@1"
         },
         {
           "command": "bsp.contextRun",
-          "when": "view == bspTargets && viewItem =~ /buildContextScope.*canRun/",
+          "when": "view == bspTargets && viewItem =~ /buildContextScope.*canRun/ && !(viewItem =~ /busy/)",
           "group": "inline@2"
         },
         {
           "command": "bsp.contextTest",
-          "when": "view == bspTargets && viewItem =~ /buildContextScope.*canTest/",
+          "when": "view == bspTargets && viewItem =~ /buildContextScope.*canTest/ && !(viewItem =~ /busy/)",
           "group": "inline@3"
         },
         {
           "command": "bsp.contextDebug",
-          "when": "view == bspTargets && viewItem =~ /buildContextScope.*canDebug/",
+          "when": "view == bspTargets && viewItem =~ /buildContextScope.*canDebug/ && !(viewItem =~ /busy/)",
           "group": "inline@4"
         },
         {
           "command": "bsp.contextRunWithoutBuilding",
-          "when": "view == bspTargets && viewItem =~ /buildContextScope.*canRun/ && viewItem =~ /canReuseBuild/",
+          "when": "view == bspTargets && viewItem =~ /buildContextScope.*canRun/ && viewItem =~ /canReuseBuild/ && !(viewItem =~ /busy/)",
           "group": "advanced@1"
         },
         {
           "command": "bsp.contextTestWithoutBuilding",
-          "when": "view == bspTargets && viewItem =~ /buildContextScope.*canTest/ && viewItem =~ /canReuseBuild/",
+          "when": "view == bspTargets && viewItem =~ /buildContextScope.*canTest/ && viewItem =~ /canReuseBuild/ && !(viewItem =~ /busy/)",
           "group": "advanced@2"
         },
         {
           "command": "bsp.contextDebugWithoutBuilding",
-          "when": "view == bspTargets && viewItem =~ /buildContextScope.*canDebug/ && viewItem =~ /canReuseBuild/",
+          "when": "view == bspTargets && viewItem =~ /buildContextScope.*canDebug/ && viewItem =~ /canReuseBuild/ && !(viewItem =~ /busy/)",
           "group": "advanced@3"
         }
       ],
       "commandPalette": [
+        {
+          "command": "bsp.cancelConnectionOperation",
+          "when": "false"
+        },
         {
           "command": "bsp.connectServer",
           "when": "false"

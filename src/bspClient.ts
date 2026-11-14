@@ -945,7 +945,7 @@ export class BspClient {
                 options.onOutput?.(operation.message);
                 if (options.onOutput) { this.operationOutput.set(originId, options.onOutput); }
                 this.progress.register(originId, update => {
-                    operation.report(update.message);
+                    operation.report(update.message, update.increment);
                     progress.report(update);
                     if (update.message) { options.onOutput?.(update.message); }
                 });

@@ -1,5 +1,6 @@
 import { BspStatusBar } from './bspStatusBar';
 import { BuildContextProvider } from './buildContextProvider';
+import { cancelConnectionOperation } from './bspConnectionActivity';
 import { BspTesting } from './bspTesting';
 import { sourcekitTestDiscovery } from './sourcekitTestDiscovery';
 import * as vscode from 'vscode';
@@ -285,6 +286,10 @@ async function initializeBspExtension(context: vscode.ExtensionContext) {
         }));
     }
     context.subscriptions.push(vscode.commands.registerCommand('bsp.refreshContexts', () => contexts.refresh()));
+    context.subscriptions.push(vscode.commands.registerCommand('bsp.cancelConnectionOperation', async item => {
+        const client = item?.connectionId ? connectionManager?.getConnection(item.connectionId)?.client : undefined;
+        if (client?.connected) { await cancelConnectionOperation(client); }
+    }));
     buildTargetProvider = new BuildTargetProvider(bspClient);
     context.subscriptions.push(new BspStatusBar(connectionManager, bspClient));
     context.subscriptions.push(new BspTesting(connectionManager, bspClient, [sourcekitTestDiscovery]));
