@@ -3,6 +3,7 @@ import { CancellationTokenSource } from 'vscode-jsonrpc/node';
 import type { BspConnection } from './bspConnectionManager';
 import type { BuildTarget } from './bspTypes';
 import type { DiscoveredTest, TestDiscovery, TestDiscoveryFactory, TestSelection } from './testDiscovery';
+import { logError } from './logger';
 
 export interface DiscoveryTarget { item: vscode.TestItem; connectionId: string; target: BuildTarget }
 interface ProviderState {
@@ -89,17 +90,23 @@ export class BspTestDiscovery implements vscode.Disposable {
         state.pending = state.pending.then(async () => {
             if (token.token.isCancellationRequested || this.disposed) { return; }
             const targets = this.targets.filter(t => t.connectionId === connectionId);
-            try {
-                const result = await state.provider.discover(targets.map(t => t.target), token.token);
-                if (this.disposed || token.token.isCancellationRequested || generation !== state.generation) { return; }
-                if (targets.some(t => this.running(t.item.id))) { this.schedule(connectionId); return; }
-                for (const target of targets) {
+            const isCurrent = () => !this.disposed && !token.token.isCancellationRequested && generation === state.generation;
+            for (const target of targets) {
+                if (!isCurrent()) { return; }
+                if (this.running(target.item.id)) { this.schedule(connectionId); return; }
+                target.item.busy = true;
+                try {
+                    const result = await state.provider.discover([target.target], token.token);
+                    if (!isCurrent()) { return; }
+                    if (this.running(target.item.id)) { this.schedule(connectionId); return; }
                     const tests = result.get(target.target.id.uri);
                     if (tests) { this.apply(target, tests); }
-                }
-            } catch (error) {
-                if (!this.disposed && !token.token.isCancellationRequested && generation === state.generation) {
-                    for (const target of targets) { target.item.error = `Test discovery failed: ${String(error)}`; }
+                } catch (error) {
+                    if (!isCurrent()) { return; }
+                    target.item.error = `Test discovery failed: ${String(error)}`;
+                    logError(`Test discovery failed for ${target.item.label} (${connectionId})`, error);
+                } finally {
+                    target.item.busy = false;
                 }
             }
         }).finally(() => { subscription?.dispose(); token.dispose(); });
